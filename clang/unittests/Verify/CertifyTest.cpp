@@ -461,6 +461,24 @@ TEST(CertifyTest, MathematicalDivisionTruncates) {
   }
 }
 
+// A term nested deeper than the evaluation's stack holds is evaluated on
+// fresh stacks, since the stack a level takes depends on the build.
+TEST(CertifyTest, DeepNestingContinuesOnFreshStacks) {
+  const int Depth = 10000;
+  Expr Sum = mathLiteral(0);
+  for (int I = 0; I != Depth; ++I)
+    Sum = node(LogicExpr::Add, math(), std::move(Sum), mathLiteral(1));
+  CertifyLimits Limits;
+  Limits.StackBytes = 1U << 20;
+  ObligationModule Empty;
+  TableModel Model;
+  std::string Failure;
+  std::optional<LogicValue> Value =
+      evaluateTerm(Empty, *Sum, Model, Limits, &Failure);
+  ASSERT_TRUE(Value) << Failure;
+  EXPECT_EQ(Value->Integer.toDecimal(), std::to_string(Depth));
+}
+
 // --- Heaps, quantifiers, and free symbols
 // -------------------------------------
 
