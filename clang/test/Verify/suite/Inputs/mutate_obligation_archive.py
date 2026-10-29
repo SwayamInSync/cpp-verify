@@ -31,6 +31,7 @@ class Archive:
         # clause lie.
         self.place_spans = []
         self.modules = []
+        self.expressions = []
 
     def u8(self):
         value = self.data[self.offset]
@@ -103,6 +104,7 @@ class Archive:
         return result
 
     def expression(self, track=True):
+        start = self.offset
         if self.u8() == 0:
             return None
         if track:
@@ -125,7 +127,9 @@ class Archive:
             self.measure_spans.append((start, self.offset))
         children_count_offset = self.offset
         children = [self.expression(track=track) for _ in range(self.u64())]
-        return {
+        node = {
+            "start": start,
+            "end": self.offset,
             "kind": kind,
             "kind_offset": kind_offset,
             "sort": sort,
@@ -137,6 +141,9 @@ class Archive:
             "children_count_offset": children_count_offset,
             "children": children,
         }
+        if track:
+            self.expressions.append(node)
+        return node
 
     def function(self):
         identity = self.string()
@@ -398,6 +405,7 @@ parser.add_argument(
         "invalid-source-begin",
         "invalid-guard-flag",
         "measure-free-variable",
+        "unary-product",
         "truncated",
     ],
 )
@@ -671,6 +679,19 @@ elif args.mode == "invalid-utf8":
     if size == 0:
         raise ValueError("archive function display name is empty")
     archive.data[start] = 0xFF
+elif args.mode == "unary-product":
+    # A product, quotient, or remainder with one operand.
+    products = [
+        node
+        for node in archive.expressions
+        if node["kind"] in (11, 12, 13) and len(node["children"]) == 2
+    ]
+    if not products:
+        raise ValueError("archive has no product, quotient, or remainder")
+    node = min(products, key=lambda node: node["start"])
+    second = node["children"][1]
+    del archive.data[second["start"] : second["end"]]
+    struct.pack_into("<Q", archive.data, node["children_count_offset"], 1)
 elif args.mode == "truncated":
     del archive.data[-1]
 
