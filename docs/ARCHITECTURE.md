@@ -2868,7 +2868,26 @@ again where it is used.
      Under BMC the passive program is the one unrolled to the final bound,
      so the same checks apply there, and a `BoundedSafe` result whose end
      no execution reaches within the bound is `[vacuous]` with a warning
-     naming the bound. Each finding records its verdict
+     naming the bound. When the function applies a spec, each trace
+     point (a branch taken, a `return`, a loop's inductive iteration with
+     its condition, the path after a loop: the `exit` event follows the
+     loop's exit assumption) whose guard the statements before it refute is
+     checked again (`contradictedPath`) in a program without the spec facts
+     (assumptions of origin `spec:`, `reads:`, or `choose` that apply a spec
+     other than a builtin one) whose specs are opaque: each non-builtin spec is replaced by
+     an `Uninterpreted` copy with its signature and no definition,
+     postcondition, unfolding, or axiom, a function of its arguments and
+     nothing more. The first point whose guard that program reaches (a
+     certified model, or one that needs an opaque spec's value,
+     `counterexample.unchecked`) gets a warning that the facts about the
+     specs applied before it contradict it; it does not make the result
+     `[vacuous]`, since the point may be dead code. A function's points
+     share the time of one smoke query: none starts after it, and the
+     search ends at the first point whose first query is undecided, since
+     each later point's query restates every fact before it. Over the 184
+     test programs that apply specs this costs 1.7% of their time. Hiding the specs would
+     not do: the certifier holds a model's choices to their axioms, and its
+     refinement gives them back. Each finding records its verdict
      (`VerifyDiagnostic::FindingOf`) and whether its query was of the entry
      state alone (`FoundAtEntry`); when a fixpoint demotes the verdict, a
      finding is withdrawn unless its query cannot contain the missing fact:
