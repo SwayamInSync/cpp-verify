@@ -3619,8 +3619,8 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   hides the synchronization in LLVM and Z3: it reported a race on LLVM's
   list of files to remove on a signal, which the full build, seeing LLVM's
   atomics, does not report, and it cannot see a race on a Z3 object that two
-  threads share. One sweep takes about 4800 CPU seconds,
-  most of each program's time in Z3, and a program at most 3.3 GB; only
+  threads share. One sweep took 4300 to 4800 CPU seconds in two runs, most
+  of each program's time in Z3, and a program at most 3.3 GB; only
   `llvm_uleb128_decoder_exhaustive.cpp`, which lit does not run, needed
   17.6 GB, more than a runner has.
 
