@@ -138,10 +138,18 @@ and possibly new failures, to source that did not change:
   return (``abort``, ``exit``): reaching one fails a check of the new kind
   ``unreachable``, and after ``assert(c)``, ``c`` holds. With ``NDEBUG`` an
   ``assert`` is nothing;
-- ``std::min`` and ``std::max`` of two integers mean what the standard says;
-  any other function of the standard library is an error naming it, as is
-  any function without a contract, except the C library's ``abs`` and memory
-  functions, which have models (:doc:`language/pointers`).
+- ``std::min`` and ``std::max`` of two integers mean what the standard says,
+  and the C library's ``abs``, ``memcpy``, ``memmove``, ``memset``, and
+  ``memcmp`` have models; any other function of the standard library is an
+  error naming it (:doc:`language/pointers`);
+- a function without a contract, which stopped every caller in 0.1.1
+  (``call to function without a verification contract``), is inlined where
+  verified code calls it: its body is checked at the arguments each caller
+  passes, and a failure in it fails the caller, shown at the helper's
+  operation with its variables named ``helper::x``. One that cannot be
+  inlined (it recurses, returns a record by value, or allocates, among
+  others) still needs a contract, and the error says which
+  (:doc:`language/functions-loops`).
 
 **One unsupported construct costs its function.** In 0.1.1 it stopped the
 file, with no verdicts. Now that function is ``Unresolved`` with reason
@@ -159,6 +167,12 @@ inside the caller's. These verify now; nothing needs changing.
 bound in time, so fewer results depend on the machine's load. A result that
 was ``Unresolved`` with ``solver.timeout`` may now be decided, and the other
 way round under heavy load (:doc:`language/tooling`).
+
+**Lemmas that time out.** A proof function that ended ``Unresolved`` with
+``solver.timeout`` is now tried by the automatic inductions too, which can
+prove it (``[by induction on j]``). They start once the direct attempt has
+spent its timeout, so such a lemma now takes longer before its verdict
+(:doc:`book/part-ii/ch13-spec-and-proof-functions`).
 
 Command lines
 -------------
