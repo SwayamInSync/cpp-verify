@@ -69,7 +69,8 @@ jobs:
             "https://github.com/cvc5/cvc5/releases/download/cvc5-${{ matrix.cvc5 }}/${{ matrix.cvc5-archive }}"
           unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
           dirname "$(find "$RUNNER_TEMP/cvc5" -name cvc5 -type f)" >> "$GITHUB_PATH"
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+          # elan v4.2.4.
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/227caca133724d5516bee25c2aeb3e609478f2d8/elan-init.sh \
             | sh -s -- -y --default-toolchain none
           # From its GitHub release: elan's own source, releases.lean-lang.org, may be down.
           version="${LEAN_TOOLCHAIN##*:v}"
@@ -153,7 +154,8 @@ jobs:
             "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/cvc5-macOS-arm64-static.zip"
           unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
           dirname "$(find "$RUNNER_TEMP/cvc5" -name cvc5 -type f)" >> "$GITHUB_PATH"
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+          # elan v4.2.4.
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/227caca133724d5516bee25c2aeb3e609478f2d8/elan-init.sh \
             | sh -s -- -y --default-toolchain none
           # From its GitHub release, as on Linux.
           version="${LEAN_TOOLCHAIN##*:v}"
@@ -191,10 +193,10 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
 
       - name: Install Ninja
-        run: choco install ninja --no-progress -y
+        run: choco install ninja --version 1.13.1 --no-progress -y
 
       - name: Build with setup.ps1
         shell: pwsh
