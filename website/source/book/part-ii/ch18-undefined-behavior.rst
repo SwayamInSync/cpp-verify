@@ -231,6 +231,26 @@ Green }`` that is ``0`` or ``1``:
      cv::pre(k >= 0 && k <= 5)
    { return (Color)k; }   // FAILS: k = 2 is not a Color
 
+Builtins
+--------
+
+A builtin can be undefined for an argument too. GCC leaves the count of the
+leading or trailing zero bits of 0 undefined, so ``__builtin_clz(x)`` and
+``__builtin_ctz(x)`` must not see ``x == 0``, an obligation of kind
+``builtin-argument`` at the call:
+
+.. cppverify-example: fails lowest
+
+.. code-block:: cpp
+
+   int lowest(unsigned x)
+     cv::post(cv::result < 32)
+   { return __builtin_ctz(x); }   // FAILS: x = 0
+
+The other bit builtins, ``__builtin_popcount``, ``__builtin_parity``,
+``__builtin_ffs``, and ``__builtin_bswap*``, are defined for every argument
+(see :doc:`../../language/functions-loops`).
+
 Signed vs. unsigned
 -------------------
 

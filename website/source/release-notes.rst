@@ -292,6 +292,18 @@ it into ``error: expected unqualified-id``. ``-fverify-contracts`` now defines
 targets unless the command line defines it, so the header defines only its
 ``__Check``, ``__Require``, and ``__Verify`` names (:doc:`language/syntax`).
 
+**Headers shared with other compilers.** Contracted code compiled only with
+this Clang and ``-fverify-contracts``, and nothing told a header which
+compiler read it, so a project that GCC, MSVC, or upstream Clang also builds
+could not keep its contracts in its sources. ``-fverify-contracts`` now
+predefines ``__cppverify__``, with the release in ``__cppverify_major__``,
+``__cppverify_minor__``, ``__cppverify_patchlevel__``, and
+``__cppverify_version__``, and a macro that is empty without it keeps each
+construct out of every other compiler's way. A failure inside a macro's
+argument is located where the argument is written, as Clang shows its own
+errors, in the JSON record, the obligation's ID, and the counterexample's
+notes too; before, those named the macro's use (:doc:`language/syntax`).
+
 **Records through pointers.** Through a pointer, 0.1.1 reached only a record's
 direct fields (``p->x``). A nested field (``p->inner.y``), a field of an
 element (``p[k].x``), and an element of an array member (``r->buf[i]``) were
@@ -514,6 +526,14 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Induction for lemmas that time out.** The automatic inductions ran only
+when unfolding a recursive spec could not settle a claim, so a lemma such as
+"an order on adjacent elements is an order on all of them" ended
+``solver.timeout``. A lemma the solver cannot settle within its timeout is
+now tried by induction too, including strong induction on a variable that
+indexes memory (``[by induction on j]``); an executable function is not
+(:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
 **Verification in a build.** ``clang++ -fverify-contracts`` verified every
 file with the defaults (Z3, 30 seconds a query, one job), and each file
 without contracts warned ``no verifiable functions found``, so a build that
@@ -571,6 +591,52 @@ operation itself (``x * x``) under the conditions around it, and the call
 does not hold (``x % 2 == 0``); JSON gives that clause as ``related``, SARIF
 as a related location. A call's step on the path is at the call too. The
 check's ID keeps its anchor (:doc:`language/tooling`).
+
+**Bit builtins.** A call of ``__builtin_clz``, ``__builtin_ctz``,
+``__builtin_popcount``, ``__builtin_parity``, ``__builtin_ffs`` (each with
+its ``l`` and ``ll`` forms), or ``__builtin_bswap16/32/64`` stopped its
+function (``call to function without a verification contract``). Each is now
+its exact definition over the operand's bits, and ``__builtin_clz`` and
+``__builtin_ctz`` of 0, which GCC leaves undefined, fail a check of the new
+kind ``builtin-argument`` at the call. A ``static_assert`` with a message in a
+function crashed cpp-verify; it now does nothing, as one without a message
+did (:doc:`language/functions-loops`).
+
+**Writes in expressions.** The value of an increment, a decrement, an
+assignment, or a comma expression inside a larger expression (``a[i++]``,
+``*dst++ = *src++``, ``while (k-- > 0)``, ``if ((c = *p) != 0)``,
+``a = b = 0``) stopped its function (``unsupported unary operator``,
+``unsupported binary operator``). Each write now runs where C++ evaluates it,
+a ``&&``, ``||``, or ``?:`` operand's only on its path, and its value is read
+there, a postfix operator's before the write. An expression the verifier
+reads twice, as a compound assignment's target, is still evaluated once.
+Where C++ leaves the order of operands open, a write that another operand may
+read is an error at the expression, as such a call already was
+(:doc:`language/functions-loops`).
+
+**Functions without contracts.** A call of a function without a contract
+stopped its caller (``call to function without a verification contract``),
+so every small helper needed a contract before its callers could be
+verified. A call of one with a body now runs that body: the verifier inlines
+it, so the caller's proof covers it at the arguments the caller passes, its
+checks are the caller's, and a failure in it is shown at its operation in the
+caller's verdict, with its variables named ``helper::x``. Helpers may hold
+loops with their invariants, early returns, and calls of other functions,
+and member functions are helpers too. Such a function is verified where
+verified code calls it, and on its own only when none does. Recursion, a
+record returned by value, allocation, ``cppverify::old`` in a loop invariant,
+and more than 2000 inlined statements in one function each need a contract,
+and say so (:doc:`language/functions-loops`).
+
+**The C library's memory functions.** A call of ``memcpy``, ``memmove``,
+``memset``, ``memcmp``, or ``abs`` stopped its function (``call to function
+without a verification contract``). Over arrays of integers, enumerations,
+or ``bool``, the memory functions are now calls of their models, contracted
+declarations in ``<cppverify.h>`` for each type of object, trusted like the
+library itself, so a proof that uses one shows it (``[trusts=memcpy]``); a
+copy whose ranges overlap fails its ``aliasing`` check. ``abs`` is its
+definition, with an ``overflow`` check at the minimum. Records, pointers, and
+the string functions are not modeled yet (:doc:`language/pointers`).
 
 **cvc5's counterexamples.** A failure cvc5 found (``--backend=cvc5``, or a race
 cvc5 won) gave no values and no path: the certifier checked its model and the

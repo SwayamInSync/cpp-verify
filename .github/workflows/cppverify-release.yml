@@ -1,9 +1,10 @@
 name: CppVerify release
 
 # A tag v<version> builds the distribution for Linux x86_64 and macOS arm64,
-# tests each archive on a fresh runner of a newer system than the one it was
-# built on, and publishes both on the tag's GitHub release (a pre-release for
-# a tag with a pre-release suffix such as -rc.1).
+# tests each archive with the verifier's test suite on a fresh runner of a
+# newer system than the one it was built on, and publishes both on the tag's
+# GitHub release (a pre-release for a tag with a pre-release suffix such as
+# -rc.1). Run by hand with publish off, it builds and tests any ref.
 
 on:
   push:
@@ -11,14 +12,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to build and publish
+        description: Existing tag to build and publish, or any ref with publish off
         required: true
+      publish:
+        description: Publish the release (off builds and tests only)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
+  PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
 
 jobs:
   build:
@@ -77,13 +83,17 @@ jobs:
       - name: Package
         id: package
         run: |
-          version="${TAG#v}"
           first="$(dist/cpp-verify/bin/cpp-verify --version | head -1)"
           echo "$first"
-          case "$first" in
-            "cpp-verify $version" | "cpp-verify $version "*) ;;
-            *) echo "error: the tag $TAG does not match '$first'" >&2; exit 1 ;;
-          esac
+          if [ "$PUBLISH" = true ]; then
+            version="${TAG#v}"
+            case "$first" in
+              "cpp-verify $version" | "cpp-verify $version "*) ;;
+              *) echo "error: the tag $TAG does not match '$first'" >&2; exit 1 ;;
+            esac
+          else
+            version="$(echo "$first" | cut -d' ' -f2)"
+          fi
           llvm="$(dist/cpp-verify/bin/cpp-verify --version | sed -n 's/^  based on LLVM \([0-9.]*\).*/\1/p')"
           if [ -z "$llvm" ]; then
             echo "error: --version names no LLVM release" >&2
@@ -132,23 +142,52 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
-          sparse-checkout: .github/workflows/cppverify-smoke.sh
-          sparse-checkout-cone-mode: false
 
       - uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.platform }}
+          path: ${{ runner.temp }}/archive
 
       - name: Unpack and verify
         run: |
+          cd "$RUNNER_TEMP/archive"
           shasum -a 256 -c ./*.sha256
           mkdir "$RUNNER_TEMP/unpacked"
           tar -C "$RUNNER_TEMP/unpacked" -xJf ./*.tar.xz
+          cd "$GITHUB_WORKSPACE"
           ./.github/workflows/cppverify-smoke.sh "$(echo "$RUNNER_TEMP"/unpacked/*/bin)"
+
+      - name: Install build tools
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update && sudo apt-get install -y ninja-build
+          else
+            brew install ninja
+          fi
+
+      # The suite runs the archive's programs; only lit's own tools are built.
+      - name: Build the test tools
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=Native \
+            -DCPPVERIFY_VENDOR_Z3=ON \
+            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF
+          ninja -C build FileCheck not count split-file llvm-config
+
+      - name: Test the archive with the verifier's suite
+        run: |
+          for program in "$RUNNER_TEMP"/unpacked/*/bin/*; do
+            ln -s "$program" build/bin/
+          done
+          build/bin/cpp-verify --version
+          build/bin/llvm-lit -sv --no-progress-bar clang/test/Verify
 
   publish:
     name: Publish
     needs: test
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     permissions:
       contents: write

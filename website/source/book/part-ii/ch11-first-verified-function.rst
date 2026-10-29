@@ -51,5 +51,6 @@ Verification runs in parallel; ghost code is stripped — no runtime contract ov
 
 Larger programs compose **modularly**: at a call site the caller proves the callee's precondition
 and assumes its postcondition, including nested
-calls such as ``return f(g(x))`` (see :doc:`ch17-backends-modular-calls`).
+calls such as ``return f(g(x))`` (see :doc:`ch17-backends-modular-calls`). A call
+of a helper without a contract runs its body, which the caller's proof covers.
 

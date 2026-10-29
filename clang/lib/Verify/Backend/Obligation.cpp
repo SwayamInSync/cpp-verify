@@ -276,6 +276,8 @@ ObligationKind verify::obligationKind(ProofObligationKind Kind) {
     return ObligationKind::MissingReturn;
   case ProofObligationKind::Unreachable:
     return ObligationKind::Unreachable;
+  case ProofObligationKind::BuiltinArgument:
+    return ObligationKind::BuiltinArgument;
   case ProofObligationKind::Unsupported:
     return ObligationKind::Unsupported;
   }
@@ -328,6 +330,8 @@ const char *verify::obligationKindName(ObligationKind Kind) {
     return "missing-return";
   case ObligationKind::Unreachable:
     return "unreachable";
+  case ObligationKind::BuiltinArgument:
+    return "builtin-argument";
   case ObligationKind::Unsupported:
     return "unsupported";
   }
@@ -2515,12 +2519,13 @@ public:
                        Stmt->Focus, Stmt->Clause});
     }
 
-    std::vector<
-        std::tuple<ObligationKind, std::unique_ptr<VCExpr>, std::string>>
+    std::vector<std::tuple<ObligationKind, std::unique_ptr<VCExpr>,
+                           std::string, SourceSpan>>
         ExitAsserts;
     for (const PassiveExitAssert &Exit : P.ExitAsserts)
       ExitAsserts.emplace_back(obligationKind(Exit.ProofKind),
-                               fromVExpr(Exit.Cond.get()), Exit.Note);
+                               fromVExpr(Exit.Cond.get()), Exit.Note,
+                               Exit.Anchor);
 
     // A theorem only where it speaks of the entry state alone: the body's
     // later states are not part of it.
@@ -2594,22 +2599,27 @@ public:
     auto appendObligation = [&](ObligationKind Kind, const VCExpr *Condition,
                                 uint64_t TraceEventCount,
                                 const std::string &Note = "",
-                                SourceSpan Focus = {}, SourceSpan Clause = {}) {
+                                SourceSpan Focus = {}, SourceSpan Clause = {},
+                                SourceSpan Anchor = {}) {
       Obligation Item;
       Item.Kind = Kind;
       Item.Note = Note;
       Item.Focus = Focus;
       Item.Clause = Clause;
-      Item.Loc = Condition->Loc;
-      Item.BeginLoc = Condition->BeginLoc;
-      Item.EndLoc = Condition->EndLoc;
+      if (Anchor.isValid())
+        Item.Focus = {Condition->Loc, Condition->BeginLoc, Condition->EndLoc};
+      else
+        Anchor = {Condition->Loc, Condition->BeginLoc, Condition->EndLoc};
+      Item.Loc = Anchor.Loc;
+      Item.BeginLoc = Anchor.BeginLoc;
+      Item.EndLoc = Anchor.EndLoc;
       Item.TraceEventCount = TraceEventCount;
       Item.Id = Identity + "::obligation:" + std::to_string(++ObligationIndex);
       Item.Goal = makeGoal(Condition);
       Item.CounterexampleQuery = vcNot(cloneLogicExpr(Item.Goal.get()));
-      Item.CounterexampleQuery->Loc = Condition->Loc;
-      Item.CounterexampleQuery->BeginLoc = Condition->BeginLoc;
-      Item.CounterexampleQuery->EndLoc = Condition->EndLoc;
+      Item.CounterexampleQuery->Loc = Anchor.Loc;
+      Item.CounterexampleQuery->BeginLoc = Anchor.BeginLoc;
+      Item.CounterexampleQuery->EndLoc = Anchor.EndLoc;
       M.Obligations.push_back(std::move(Item));
     };
 
@@ -2625,8 +2635,9 @@ public:
       if (oversize())
         return ObligationSizeError::obligations(size(), MaxNodes);
     }
-    for (const auto &[Kind, Exit, Note] : ExitAsserts) {
-      appendObligation(Kind, Exit.get(), M.TraceEvents.size(), Note);
+    for (const auto &[Kind, Exit, Note, Anchor] : ExitAsserts) {
+      appendObligation(Kind, Exit.get(), M.TraceEvents.size(), Note, {}, {},
+                       Anchor);
       if (oversize())
         return ObligationSizeError::obligations(size(), MaxNodes);
     }
