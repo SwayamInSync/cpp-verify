@@ -3586,6 +3586,26 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   `.github/workflows/cppverify-fuzz.yml`; `suite/archive_fuzzer.test` runs it
   on archives of the test programs.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
+- Sanitizers: `-DCPPVERIFY_SANITIZER="address;undefined"` builds
+  `clangVerify` and `cpp-verify` with AddressSanitizer and
+  UndefinedBehaviorSanitizer beside an uninstrumented LLVM, Clang, and Z3,
+  and `.github/workflows/cppverify-sanitize.sh` runs every Verify test
+  program through it with two jobs, failing on any report;
+  `cppverify-sanitizers.yml` does it nightly. Verdicts are not compared,
+  since the sanitizers slow the verifier. Its first run on CI found the
+  counterexample checker overflowing its stack in 11 programs: ASan gives
+  every local of `Evaluator::evalNode` a guarded slot of its own, so a level
+  of nesting took over 8 KiB instead of about 1 KiB, and the 50,000 levels
+  `CertifyLimits::Frames` allows did not fit in the checker's 256 MiB
+  thread. The evaluator now continues on a fresh stack once half of its own
+  is used (`CertifyLimits::StackBytes`), as Clang's
+  `runWithSufficientStackSpace` does, so the nesting limit, and every
+  verdict, is the same in every build. It found no other report in the
+  verifier's own code. ThreadSanitizer is not run: in such a build, with
+  only the verifier instrumented, its runtime crashed in its own trace lists
+  or hung on its own trace locks in 66 of 69 runs of `spec_automation.cpp`
+  with four jobs (run under gdb to see where), so a run cannot tell a race
+  from the runtime's failure.
 
 Every new semantic feature needs layered oracles rather than a solver result
 alone:

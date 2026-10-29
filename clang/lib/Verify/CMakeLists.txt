@@ -17,6 +17,27 @@ if(CPPVERIFY_ENABLE_COVERAGE)
   message(STATUS "cpp-verify: coverage instrumentation enabled")
 endif()
 
+# The verifier's own code under sanitizers, beside an uninstrumented LLVM,
+# Clang, and Z3, as the nightly sanitizer job builds it with
+# "address;undefined". The precompiled header of the libraries it uses is
+# built without them, so it is not reused.
+set(CPPVERIFY_SANITIZER "" CACHE STRING
+  "Sanitizers for clangVerify and cpp-verify, such as address;undefined")
+set(_cppverify_pch_reuse)
+if(CPPVERIFY_SANITIZER)
+  string(REPLACE ";" "," _cppverify_sanitizers "${CPPVERIFY_SANITIZER}")
+  set(_cppverify_sanitize_flags
+    -fsanitize=${_cppverify_sanitizers} -fno-omit-frame-pointer)
+  # The verifier is built without RTTI.
+  if(_cppverify_sanitizers MATCHES "undefined")
+    list(APPEND _cppverify_sanitize_flags -fno-sanitize=vptr,function)
+  endif()
+  message(STATUS "cpp-verify: sanitizers ${_cppverify_sanitizers}")
+  set(_cppverify_pch_reuse DISABLE_PCH_REUSE)
+  set_property(GLOBAL PROPERTY CPPVERIFY_SANITIZE_FLAGS
+    "${_cppverify_sanitize_flags}")
+endif()
+
 # A vendored Z3 installs its headers when its ExternalProject builds, so the
 # sources that include them must wait for it (DEPENDS orders obj.clangVerify).
 get_property(_cppverify_z3_ep GLOBAL PROPERTY CPPVERIFY_Z3_EP_TARGET)
@@ -57,6 +78,7 @@ add_clang_library(clangVerify
   Driver/DumpIR.cpp
   Driver/CppVerifyIntegration.cpp
   Driver/CppVerifyVersion.cpp
+  ${_cppverify_pch_reuse}
 
   LINK_LIBS
   clangAST
@@ -84,6 +106,14 @@ if(CPPVERIFY_ENABLE_COVERAGE)
       -fprofile-instr-generate -fcoverage-mapping)
   endif()
 endif()
+
+if(CPPVERIFY_SANITIZER)
+  target_compile_options(clangVerify PRIVATE ${_cppverify_sanitize_flags})
+  if(TARGET obj.clangVerify)
+    target_compile_options(obj.clangVerify PRIVATE ${_cppverify_sanitize_flags})
+  endif()
+endif()
+
 target_include_directories(clangVerify PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/Driver
