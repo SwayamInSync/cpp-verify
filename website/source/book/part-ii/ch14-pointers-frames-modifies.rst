@@ -405,6 +405,49 @@ and writes ``s.items[s.size]`` and ``s.size`` as the version above does
 through ``s->``, ``cppverify::modifies(s)`` is the whole stack, and
 ``&s.size`` and ``s.items`` are pointers into it.
 
+Global records and arrays
+-------------------------
+
+A global is memory too. A mutable global record or array is one object at
+an address of its own: its fields and elements are cells, a function writes
+them only within its ``cppverify::modifies``, and a call changes only the
+callee's footprints. Since any function may change a global, its value at
+entry is arbitrary; contracts say what a function needs of it:
+
+.. code-block:: cpp
+
+   struct Counters {
+     int hits;
+     int misses;
+   };
+
+   Counters stats;
+
+   void hit()
+     cv::pre(stats.hits < 1000000)
+     cv::modifies(stats.hits)
+     cv::post(stats.hits == cv::old(stats.hits) + 1)
+   {
+     stats.hits = stats.hits + 1;
+   }
+
+   int lookups()
+     cv::pre(0 <= stats.hits && stats.hits < 1000000)
+     cv::pre(0 <= stats.misses && stats.misses < 1000000)
+     cv::modifies(stats.hits)
+     cv::post(cv::result == cv::old(stats.hits) + 1 + stats.misses)
+   {
+     hit();
+     return stats.hits + stats.misses;
+   }
+
+``lookups`` knows that ``stats.misses`` kept its value, since ``hit`` writes
+``stats.hits`` alone. :doc:`../../language/pointers` has the rules: pointers
+into a global array are bounded by it and may be passed as slices, and a
+spec cannot read a mutable global. A ``static`` local is an object of the
+same kind that only its function names: that function's own state, which
+it writes without a frame and which only calls that may reach it change.
+
 Declaring a checked extent
 --------------------------
 

@@ -1120,8 +1120,9 @@ a range located through a call, a pointer read from memory, or a variable
 the body may change is rejected: copy the pointer or index into a variable
 the body does not change. The contract holds at the head, where the loop
 variable is not declared, so it cannot name it. A range over a class,
-through its ``begin`` and ``end``, an array of arrays, and a global array
-that is not a constant table are not supported yet.
+through its ``begin`` and ``end``, and an array of arrays are not supported
+yet; a range over a global array is an object like a local one (see
+:doc:`pointers`).
 
 A condition may declare a variable, ``while (int k = next(i))``: it is
 declared, and its value tested, at every test, so a loop's contract cannot

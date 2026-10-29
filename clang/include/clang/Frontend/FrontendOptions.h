@@ -529,6 +529,24 @@ public:
   /// assumes from other files, for cpp-verify --check-contracts.
   std::string VerifyContractsOut;
 
+  /// The solver CppVerify verifies a compilation with (-fverify-backend=).
+  enum class CppVerifyBackend { Z3, CVC5, Portfolio, Race, BMC };
+  CppVerifyBackend VerifyBackend = CppVerifyBackend::Z3;
+
+  /// The milliseconds each CppVerify solver query may take, cpp-verify's
+  /// default unless given; 0 disables the limit (-fverify-timeout=).
+  unsigned VerifyTimeoutMs = 30000;
+
+  /// The solver jobs CppVerify runs for this compilation (-fverify-jobs=).
+  unsigned VerifyJobs = 1;
+
+  /// Where CppVerify keeps its proofs across compilations (-fverify-cache=).
+  std::string VerifyCache;
+
+  /// Where CppVerify writes this compilation's results as JSON Lines
+  /// (-fverify-report=).
+  std::string VerifyReport;
+
   /// Auxiliary triple for CUDA/HIP/SYCL compilation.
   std::string AuxTriple;
 

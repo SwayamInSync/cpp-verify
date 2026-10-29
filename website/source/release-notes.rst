@@ -470,6 +470,24 @@ of a constant table, a ``const`` or ``constexpr`` array with a constant
 initializer or a string literal, is now the value its initializer gives it,
 and each index must lie in its array (:doc:`language/pointers`).
 
+**Global records and arrays.** Only integral globals were supported; a
+record or array global was an error (``global aggregate access is
+unsupported``, ``the global array 'table' is unsupported``). A mutable global
+of a record or array type is now an object at a fixed address of its own:
+its fields and elements are cells, each index bounded by its array, written
+only within ``cppverify::modifies`` (the whole object, a field, an element, or a
+range such as ``history[0 : 8]``), and a pointer into it is bounded by the
+array, field, or record it is formed from, so it may be passed as a slice
+(:doc:`language/pointers`).
+
+**Static locals.** A static local that was not a constant table was an
+error (``static local variables are unsupported``). One with a constant
+initializer is now its function's own state: any value at entry, written
+without a frame, and changed by a call exactly when the callee may reach its
+function, directly or through other calls. An initializer that runs code at
+the first call, and a pointer to or into a static local, are errors
+(:doc:`language/pointers`).
+
 **assert and calls that do not return.** ``assert(c)`` stopped its function
 (``unsupported statement: ParenExpr``), and a call to ``abort`` or ``exit``
 was an error (``call to function without a verification contract``).
@@ -533,6 +551,17 @@ when unfolding a recursive spec could not settle a claim, so a lemma such as
 now tried by induction too, including strong induction on a variable that
 indexes memory (``[by induction on j]``); an executable function is not
 (:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
+**Verification in a build.** ``clang++ -fverify-contracts`` verified every
+file with the defaults (Z3, 30 seconds a query, one job), and each file
+without contracts warned ``no verifiable functions found``, so a build that
+gave the flag to every file printed a warning for most of them. A compilation
+now takes ``-fverify-backend=``, ``-fverify-timeout=``, ``-fverify-jobs=``,
+``-fverify-cache=`` (proofs shared by every compilation that names the
+directory), and ``-fverify-report`` (the results as JSON Lines beside each
+object, or ``-fverify-report=<file>``); a file without a function to verify
+says nothing, and the reference shows a CMake recipe, with ``-fno-verify``
+for fast development builds (:doc:`language/tooling`).
 
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
