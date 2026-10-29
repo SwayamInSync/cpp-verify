@@ -18,6 +18,17 @@ a cpp-verify precondition is written 'cppverify::pre'`) with a fix-it to the
 not make bare words constructs. With the flag, `<cppverify.h>` is included
 implicitly; without it, the constructs are not recognized.
 
+With the flag, in C++, the compiler predefines `__cppverify__` (1) and the
+release in `__cppverify_major__`, `__cppverify_minor__`,
+`__cppverify_patchlevel__`, and `__cppverify_version__` (the string
+`--version` prints; the one `CPPVERIFY_VERSION` in `clang/CMakeLists.txt`
+sets all of them, through `clang/Basic/Version.inc`). Like `__cplusplus`, they
+describe the language, so `-undef` keeps them. A header that GCC, MSVC, or
+upstream Clang also reads wraps each construct in a macro that is empty when
+`__cppverify__` is not defined, as Frama-C's libc defines `__PUSH_FC_STDLIB`
+to a Frama-C pragma under its predefined `__FRAMAC__` and to nothing otherwise
+(`share/libc/features.h`).
+
 ## Contract Syntax Overview
 
 | Syntax | Where | Meaning |
@@ -764,14 +775,17 @@ cppverify::spec bool reach(int a, int b)
 
 ### Automatic induction and counterexamples too large to compute
 
-When no finite unfolding settles a claim about a recursive spec, the verifier
-tries well-founded inductions over it, as Dafny's automatic induction and
+When no finite unfolding settles a claim about a recursive spec, or the
+solver cannot settle a lemma (a proof function) within its timeout, the
+verifier tries well-founded inductions over it, as Dafny's automatic induction and
 Lean's and Isabelle's functional induction do: the claim at every value
 smaller in a measure, everything else fixed. The measure is a recursive
 spec's own `cppverify::decreases` at the application the claim makes, and the
 hypothesis is also given at the values the spec's recursion reaches, through
 the other members of its recursion group and under quantifiers; strong
-induction on an integer variable is tried too. Smaller means smaller by the
+induction on an integer variable that the claim passes to a spec or uses as
+an index into memory is tried too (an order on adjacent elements of an array
+is an order on all of them by induction on the second index). Smaller means smaller by the
 decrease relation of termination checks, which has no infinite descending
 chain, so no induction proves a false claim; the hypothesis is the
 function's own claim, without the facts the verifier added. A verified

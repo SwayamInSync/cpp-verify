@@ -3172,8 +3172,8 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
     if (!isa<ImplicitCastExpr, ParenExpr, FullExpr>(S))
       ++Depth;
     if (Depth > Limit) {
-      const PresumedLoc Where =
-          Ctx.getSourceManager().getPresumedLoc(S->getBeginLoc());
+      const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(
+          Ctx.getSourceManager().getFileLoc(S->getBeginLoc()));
       error(functionName(FD) + ": the expression at " +
             (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
                                    std::to_string(Where.getColumn())

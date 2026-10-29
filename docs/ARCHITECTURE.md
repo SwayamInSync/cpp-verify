@@ -1996,7 +1996,9 @@ recursing to the nesting limit. If the complete query is unresolved, Z3 may solv
 ordered queries. It does not reconstruct alternate passive programs.
 
 **Induction.** A module left `Unresolved` with `spec.fuel` (or marked
-`InductionOnly`) is retried by well-founded inductions in
+`InductionOnly`), or a lemma's (a module with a `Contract`, which only a
+proof function has) left with `solver.timeout` or `solver.unknown`, is
+retried by well-founded inductions in
 `VerifyBackend::verify`, the entry every caller and backend shares; composite
 backends call `verifyDirect` on their solvers, so the step runs once, over
 the composite (`Backend/Induction.cpp`). The claim of a module is its
@@ -2010,7 +2012,8 @@ those assumptions, simplified like the goals (`ObligationModule::Theorems`,
 assumption a premise, as before). A scheme (`InductionScheme`) is a measure
 over some variables: the `cppverify::decreases` of a recursive spec applied in the claim
 at that application (`LogicFunctionDecl::Decreases`, lowered by `SpecAxioms`),
-or one integer variable (strong induction). Its induction module is the
+or one integer variable that the claim passes to a spec or uses in a read's
+address (strong induction, `integerArgumentVariables`). Its induction module is the
 module with a hypothesis assumed by every obligation other than unwinding
 ones: the claim, with the definitions it assumes substituted
 (`(x == t && A) -> B` becomes `(A -> B)[x := t]`, which only adds models),
@@ -2566,7 +2569,10 @@ obligation's counterexample query to true.
 
 Public obligation identities are source anchored:
 `function-identity::kind@line:column`, with `#N` only for obligations sharing
-one anchor. This keeps later IDs stable when an unrelated obligation is inserted
+one anchor. A location in a macro is where Clang's diagnostics show it
+(`SourceManager::getFileLoc`): in an argument where it is written, elsewhere
+where the macro is used; a range written in one place (one argument) is
+that place's (`Lexer::makeFileCharRange`), and any other the macro's use. This keeps later IDs stable when an unrelated obligation is inserted
 or reordered without moving the source anchor; JSON records carry it, and text
 names only the kind (`[overflow]`), since the location prefixes the line.
 
