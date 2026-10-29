@@ -292,6 +292,18 @@ it into ``error: expected unqualified-id``. ``-fverify-contracts`` now defines
 targets unless the command line defines it, so the header defines only its
 ``__Check``, ``__Require``, and ``__Verify`` names (:doc:`language/syntax`).
 
+**Headers shared with other compilers.** Contracted code compiled only with
+this Clang and ``-fverify-contracts``, and nothing told a header which
+compiler read it, so a project that GCC, MSVC, or upstream Clang also builds
+could not keep its contracts in its sources. ``-fverify-contracts`` now
+predefines ``__cppverify__``, with the release in ``__cppverify_major__``,
+``__cppverify_minor__``, ``__cppverify_patchlevel__``, and
+``__cppverify_version__``, and a macro that is empty without it keeps each
+construct out of every other compiler's way. A failure inside a macro's
+argument is located where the argument is written, as Clang shows its own
+errors, in the JSON record, the obligation's ID, and the counterexample's
+notes too; before, those named the macro's use (:doc:`language/syntax`).
+
 **Records through pointers.** Through a pointer, 0.1.1 reached only a record's
 direct fields (``p->x``). A nested field (``p->inner.y``), a field of an
 element (``p[k].x``), and an element of an array member (``r->buf[i]``) were
@@ -514,6 +526,14 @@ statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Induction for lemmas that time out.** The automatic inductions ran only
+when unfolding a recursive spec could not settle a claim, so a lemma such as
+"an order on adjacent elements is an order on all of them" ended
+``solver.timeout``. A lemma the solver cannot settle within its timeout is
+now tried by induction too, including strong induction on a variable that
+indexes memory (``[by induction on j]``); an executable function is not
+(:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
 the first column of its last token, compiler errors stayed text, and nothing
@@ -582,6 +602,20 @@ reads twice, as a compound assignment's target, is still evaluated once.
 Where C++ leaves the order of operands open, a write that another operand may
 read is an error at the expression, as such a call already was
 (:doc:`language/functions-loops`).
+
+**Functions without contracts.** A call of a function without a contract
+stopped its caller (``call to function without a verification contract``),
+so every small helper needed a contract before its callers could be
+verified. A call of one with a body now runs that body: the verifier inlines
+it, so the caller's proof covers it at the arguments the caller passes, its
+checks are the caller's, and a failure in it is shown at its operation in the
+caller's verdict, with its variables named ``helper::x``. Helpers may hold
+loops with their invariants, early returns, and calls of other functions,
+and member functions are helpers too. Such a function is verified where
+verified code calls it, and on its own only when none does. Recursion, a
+record returned by value, allocation, ``cppverify::old`` in a loop invariant,
+and more than 2000 inlined statements in one function each need a contract,
+and say so (:doc:`language/functions-loops`).
 
 **The C library's memory functions.** A call of ``memcpy``, ``memmove``,
 ``memset``, ``memcmp``, or ``abs`` stopped its function (``call to function

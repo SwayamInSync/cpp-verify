@@ -196,7 +196,10 @@ private:
   bool contractMath() const {
     return InContractExpression && IntMode == VIntMode::Machine;
   }
-  std::unique_ptr<VFunction> convertFunction(const FunctionDecl *FD);
+  /// \p AsInlineHelper converts a function without a contract, which is
+  /// otherwise not converted, for inlining at its calls.
+  std::unique_ptr<VFunction> convertFunction(const FunctionDecl *FD,
+                                             bool AsInlineHelper = false);
   /// Numbers the nondeterministic choices of contract_assert(...) by.
   unsigned NextAssertBy = 0;
   /// The functions choose(...) expressions are lifted to.
@@ -245,6 +248,29 @@ private:
   /// The models of <cppverify.h> (cppverify::model) that converted calls
   /// use, in the order of their first use.
   std::vector<const FunctionDecl *> UsedLibraryModels;
+  /// The definitions of the functions without contracts that converted
+  /// calls inline, in the order of their first call.
+  std::vector<const FunctionDecl *> UsedInlineHelpers;
+  /// Why the body of a helper, by identity, could not be converted.
+  std::map<std::string, std::string> UnconvertedHelpers;
+  /// A function whose calls run its body where they are written: it has a
+  /// definition the converter can inline and no contract. A constexpr one is
+  /// lifted as a spec instead, and one of a system header is not inlined.
+  bool isInlineHelper(const FunctionDecl *FD) const;
+  /// A call of \p FD becomes a call statement: its contract stands for it,
+  /// or its body is inlined.
+  bool lowersToCall(const FunctionDecl *FD) const;
+  /// Whether a call of \p FD may write memory its caller can see: for a
+  /// contracted function, what its contract allows; for an inline helper,
+  /// what its body stores through a pointer, a reference, or its object, to
+  /// a global, or by a call that may write. \p Visiting holds the helpers
+  /// whose bodies are being scanned (a recursive one may write).
+  bool callMayWrite(const FunctionDecl *FD,
+                    std::set<const FunctionDecl *> &Visiting) const;
+  /// \p S, a call converted from \p Call, with where the call is written;
+  /// a call of an inline helper is marked, and its helper recorded.
+  std::unique_ptr<VCallStmt> atCall(std::unique_ptr<VCallStmt> S,
+                                    const Expr *Call);
   /// The model named \p Name whose first parameter points to \p Element.
   const FunctionDecl *libraryModel(llvm::StringRef Name,
                                    QualType Element) const;
@@ -440,7 +466,8 @@ private:
   /// a variable \p Reader names, or memory when \p ReaderReadsMemory.
   bool writesWhatReads(const Expr *Writer, const Expr *Reader,
                        bool ReaderReadsMemory) const;
-  /// A call of a contracted executable function, which may be hoisted.
+  /// A call of an executable function that becomes a call statement, which
+  /// may be hoisted.
   bool isExecCall(const Stmt *S) const;
   bool containsExecCall(const Stmt *S) const;
   /// A call that may write memory: its callee states a frame or takes a

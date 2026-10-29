@@ -1,6 +1,7 @@
 //===--- ASTConverter.cpp -------------------------------------------------===//
 #include "ASTConverter.h"
 #include "../Transform/Inductive.h"
+#include "../Transform/InlineHelpers.h"
 #include "../Transform/SubobjectBounds.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
@@ -981,12 +982,6 @@ static std::optional<bool> stdMinOrMax(const FunctionDecl *Callee,
   return IsMax;
 }
 
-/// \p S, a call converted from \p Call, with where the call is written.
-static std::unique_ptr<VCallStmt> atCall(std::unique_ptr<VCallStmt> S,
-                                         const Expr *Call) {
-  S->CallSite = {Call->getExprLoc(), Call->getBeginLoc(), Call->getEndLoc()};
-  return S;
-}
 
 /// A function as the verifier's messages name it, a template specialization
 /// with its arguments (`maxv<int>`).
@@ -2512,6 +2507,37 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     };
     Calls(FD->getBody());
   }
+  // A function without a contract that converted code calls runs its body
+  // there: convert each once, as it is written, and those it calls in turn
+  // (inlineHelperCalls puts the bodies in place). One verified on its own is
+  // converted already.
+  for (size_t I = 0; I != UsedInlineHelpers.size(); ++I) {
+    const FunctionDecl *Helper = UsedInlineHelpers[I];
+    if (Identities.contains(functionIdentity(Helper)))
+      continue;
+    const size_t ErrorsBefore = Errors.size();
+    auto Fn = convertFunction(Helper, /*AsInlineHelper=*/true);
+    if (Fn && Errors.size() == ErrorsBefore) {
+      Fn->IsInlineHelper = true;
+      Identities.insert(Fn->Identity);
+      Out.push_back(std::move(Fn));
+      continue;
+    }
+    // A helper is not verified on its own: each call says why it cannot be
+    // inlined.
+    std::string Why = "its body could not be converted";
+    if (Errors.size() != ErrorsBefore) {
+      const ConversionError &First = Errors[ErrorsBefore];
+      const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(
+          Ctx.getSourceManager().getFileLoc(First.Range.getBegin()));
+      Why = First.Message;
+      if (Where.isValid())
+        Why += " at " + std::to_string(Where.getLine()) + ":" +
+               std::to_string(Where.getColumn());
+      Errors.erase(Errors.begin() + ErrorsBefore, Errors.end());
+    }
+    UnconvertedHelpers[functionIdentity(Helper)] = std::move(Why);
+  }
   // The models the converted calls use, trusted by their callers, and quiet:
   // the others are never converted.
   for (const FunctionDecl *Model : UsedLibraryModels)
@@ -2556,6 +2582,10 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
       Lifted, [](const auto &A, const auto &B) { return A.first < B.first; });
   for (auto &Entry : Lifted)
     Out.push_back(std::move(Entry.second));
+  // Every function is converted: a call of a helper runs its body, which the
+  // analyses below (recursion, clusters, dependencies) and every pass after
+  // the conversion see in the caller.
+  inlineHelperCalls(Out, UnconvertedHelpers);
   // when(c): the body defines the spec on its domain, and elsewhere its value
   // is that of an uninterpreted function of the same arguments.
   std::vector<std::unique_ptr<VFunction>> Unspecified;
@@ -3114,8 +3144,8 @@ bool ASTConverter::exceedsNestingLimit(const FunctionDecl *FD,
     if (!isa<ImplicitCastExpr, ParenExpr, FullExpr>(S))
       ++Depth;
     if (Depth > Limit) {
-      const PresumedLoc Where =
-          Ctx.getSourceManager().getPresumedLoc(S->getBeginLoc());
+      const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(
+          Ctx.getSourceManager().getFileLoc(S->getBeginLoc()));
       error(functionName(FD) + ": the expression at " +
             (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
                                    std::to_string(Where.getColumn())
@@ -3333,7 +3363,7 @@ void ASTConverter::appendObjectInvariants(
 }
 
 std::unique_ptr<VFunction>
-ASTConverter::convertFunction(const FunctionDecl *FD) {
+ASTConverter::convertFunction(const FunctionDecl *FD, bool AsInlineHelper) {
   llvm::SaveAndRestore Converting(ConvertingDecl, FD);
   llvm::SaveAndRestore At(CurrentRange, SourceRange(FD->getLocation()));
   llvm::SaveAndRestore Owner(ErrorFunction, functionIdentity(FD));
@@ -3346,7 +3376,8 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
     // Assertions and ghost code are obligations even without a contract
     // clause; only a function that states nothing is left unverified.
     static const FunctionContractInfo NoClauses;
-    if (FD->isConstexpr() || !hasContractStatements(FD, Ctx))
+    if (!AsInlineHelper &&
+        (FD->isConstexpr() || !hasContractStatements(FD, Ctx)))
       return nullptr;
     FCI = &NoClauses;
   }
@@ -3399,6 +3430,7 @@ ASTConverter::convertFunction(const FunctionDecl *FD) {
   ContractTexts[Fn->Identity] = contractText(*FCI);
   Fn->IsSpec = FCI->IsSpec;
   Fn->IsProof = FCI->IsProof;
+  Fn->WithoutContract = !functionContract(FD);
   if (FCI->MayDiverge.isValid() && !FCI->IsSpec && !FCI->IsProof) {
     Fn->DivergenceLoc = FCI->MayDiverge;
     Fn->DivergenceDeclared = true;
@@ -4535,9 +4567,16 @@ ASTConverter::convertAbs(const CallExpr *CE) {
   case Builtin::BI__builtin_llabs:
     break;
   default: {
-    // std::abs of an integer, which a library may define inline.
+    // std::abs of an integer, which a library may define inline: in std
+    // (libstdc++), or, for long and long long, in the global namespace of
+    // its <stdlib.h>, which <cstdlib> brings into std (libc++). A global abs
+    // of the user's own is a function like any other.
     const FunctionDecl *Callee = CE->getDirectCallee();
-    if (!Callee || !Callee->isInStdNamespace() || !Callee->getIdentifier() ||
+    if (!Callee ||
+        !(Callee->isInStdNamespace() ||
+          (Callee->getDeclContext()->getRedeclContext()->isTranslationUnit() &&
+           Ctx.getSourceManager().isInSystemHeader(Callee->getLocation()))) ||
+        !Callee->getIdentifier() ||
         Callee->getName() != "abs" || Callee->getNumParams() != 1 ||
         !Callee->getParamDecl(0)->getType()->isIntegerType() ||
         !Ctx.hasSameType(Callee->getParamDecl(0)->getType(),
@@ -7377,7 +7416,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
           return std::make_unique<VVarExpr>(Read, Ty, E->getExprLoc());
         }
       }
-      if (functionContract(Callee))
+      if (lowersToCall(Callee))
         error(CurrentFn->Name +
               ": executable call is unsupported in this expression "
               "context: " +
@@ -7457,7 +7496,7 @@ void ASTConverter::convertExecCallArg(
   const Expr *CallExprCandidate = E->IgnoreParenImpCasts();
   if (const auto *CE = dyn_cast<CallExpr>(CallExprCandidate)) {
     if (const FunctionDecl *Callee = CE->getDirectCallee()) {
-      if (functionContract(Callee) && !calleeIsSpec(Callee) &&
+      if (lowersToCall(Callee) && !calleeIsSpec(Callee) &&
           !calleeIsProof(Callee)) {
         std::vector<std::unique_ptr<VExpr>> InnerArgs;
         convertExecCallArgs(CE, Prelude, InnerArgs);
@@ -7598,10 +7637,117 @@ void ASTConverter::convertExecCallArgs(
   }
 }
 
+bool ASTConverter::isInlineHelper(const FunctionDecl *FD) const {
+  if (!FD || functionContract(FD) || calleeIsSpec(FD) || calleeIsProof(FD) ||
+      FD->getBuiltinID() || FD->isVariadic() || FD->isInStdNamespace() ||
+      isLibraryModel(FD))
+    return false;
+  const FunctionDecl *Definition = nullptr;
+  if (!FD->hasBody(Definition) || !Definition ||
+      functionContract(Definition) ||
+      Ctx.getSourceManager().isInSystemHeader(Definition->getLocation()))
+    return false;
+  if (const auto *Method = dyn_cast<CXXMethodDecl>(Definition))
+    if (isa<CXXConstructorDecl>(Method) || unsupportedMemberFunction(Method))
+      return false;
+  return true;
+}
+
+bool ASTConverter::lowersToCall(const FunctionDecl *FD) const {
+  return FD && (functionContract(FD) || isInlineHelper(FD));
+}
+
+/// Whether a write to \p Target may be seen outside the function that
+/// writes it: it is memory a pointer, a reference, or `this` reaches, or a
+/// global, rather than a local or a parameter.
+static bool visibleTarget(const Expr *Target) {
+  Target = Target->IgnoreParenImpCasts();
+  if (const auto *Ref = dyn_cast<DeclRefExpr>(Target)) {
+    const auto *VD = dyn_cast<VarDecl>(Ref->getDecl());
+    return !VD || VD->hasGlobalStorage() || VD->getType()->isReferenceType();
+  }
+  if (const auto *Member = dyn_cast<MemberExpr>(Target))
+    return Member->isArrow() || visibleTarget(Member->getBase());
+  if (const auto *Element = dyn_cast<ArraySubscriptExpr>(Target)) {
+    const Expr *Base = Element->getBase()->IgnoreParenImpCasts();
+    return !Base->getType()->isArrayType() || visibleTarget(Base);
+  }
+  return true;
+}
+
+bool ASTConverter::callMayWrite(const FunctionDecl *FD,
+                                std::set<const FunctionDecl *> &Visiting) const {
+  if (!FD)
+    return true;
+  if (const FunctionContractInfo *FCI = functionContract(FD)) {
+    if (FCI->IsSpec)
+      return false;
+    if (!FCI->Modifies.empty())
+      return true;
+    if (const auto *Method = dyn_cast<CXXMethodDecl>(FD);
+        Method && Method->isInstance() && !Method->isConst())
+      return true;
+    return llvm::any_of(FD->parameters(), [](const ParmVarDecl *Param) {
+      return Param->getType()->isPointerType() ||
+             Param->getType()->isReferenceType();
+    });
+  }
+  if (calleeIsSpec(FD) || stdMinOrMax(FD, Ctx))
+    return false;
+  if (unsigned Builtin = FD->getBuiltinID())
+    return !Ctx.BuiltinInfo.isConst(Builtin) &&
+           !Ctx.BuiltinInfo.isPure(Builtin);
+  const FunctionDecl *Definition = nullptr;
+  if (!isInlineHelper(FD) || !FD->hasBody(Definition) ||
+      !Visiting.insert(Definition).second)
+    return true;
+  struct Finder : RecursiveASTVisitor<Finder> {
+    const ASTConverter &Converter;
+    std::set<const FunctionDecl *> &Visiting;
+    bool Found = false;
+    Finder(const ASTConverter &Converter,
+           std::set<const FunctionDecl *> &Visiting)
+        : Converter(Converter), Visiting(Visiting) {}
+    bool TraverseLambdaExpr(LambdaExpr *) { return true; }
+    bool VisitBinaryOperator(BinaryOperator *B) {
+      Found |= B->isAssignmentOp() && visibleTarget(B->getLHS());
+      return !Found;
+    }
+    bool VisitUnaryOperator(UnaryOperator *U) {
+      Found |= U->isIncrementDecrementOp() && visibleTarget(U->getSubExpr());
+      return !Found;
+    }
+    bool VisitCXXNewExpr(CXXNewExpr *) { return !(Found = true); }
+    bool VisitCXXDeleteExpr(CXXDeleteExpr *) { return !(Found = true); }
+    bool VisitCallExpr(CallExpr *Call) {
+      Found |= Converter.callMayWrite(Call->getDirectCallee(), Visiting);
+      return !Found;
+    }
+  } Scan(*this, Visiting);
+  Scan.TraverseStmt(Definition->getBody());
+  Visiting.erase(Definition);
+  return Scan.Found;
+}
+
+std::unique_ptr<VCallStmt> ASTConverter::atCall(std::unique_ptr<VCallStmt> S,
+                                                const Expr *Call) {
+  S->CallSite = {Call->getExprLoc(), Call->getBeginLoc(), Call->getEndLoc()};
+  if (const auto *CE = dyn_cast<CallExpr>(Call))
+    if (const FunctionDecl *Callee = CE->getDirectCallee();
+        Callee && isInlineHelper(Callee)) {
+      S->InlinesHelper = true;
+      const FunctionDecl *Definition = nullptr;
+      Callee->hasBody(Definition);
+      if (!llvm::is_contained(UsedInlineHelpers, Definition))
+        UsedInlineHelpers.push_back(Definition);
+    }
+  return S;
+}
+
 bool ASTConverter::isExecCall(const Stmt *S) const {
   const auto *Call = dyn_cast_or_null<CallExpr>(S);
   const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
-  return Callee && functionContract(Callee) && !calleeIsSpec(Callee) &&
+  return Callee && lowersToCall(Callee) && !calleeIsSpec(Callee) &&
          !calleeIsProof(Callee);
 }
 
@@ -7619,18 +7765,12 @@ bool ASTConverter::containsModifyingCall(const Stmt *S) const {
   if (!S)
     return false;
   if (isExecCall(S)) {
-    const auto *Call = cast<CallExpr>(S);
-    const FunctionDecl *Callee = Call->getDirectCallee();
-    if (!functionContract(Callee)->Modifies.empty())
-      return true;
-    // A member function that is not const may write its object.
-    if (const auto *Method = dyn_cast<CXXMethodDecl>(Callee);
-        Method && Method->isInstance() && !Method->isConst())
-      return true;
-    if (llvm::any_of(Callee->parameters(), [](const ParmVarDecl *Param) {
-          return Param->getType()->isPointerType() ||
-                 Param->getType()->isReferenceType();
-        }))
+    // A contracted callee writes what its contract allows: its frame, its
+    // object when it is a member function that is not const, and what its
+    // pointer and reference parameters reach; an inlined body what it
+    // stores.
+    std::set<const FunctionDecl *> Visiting;
+    if (callMayWrite(cast<CallExpr>(S)->getDirectCallee(), Visiting))
       return true;
   }
   return llvm::any_of(S->children(), [&](const Stmt *Child) {
@@ -9458,7 +9598,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       const auto *CE = dyn_cast<CallExpr>(RetE->IgnoreParenImpCasts());
       if (CE) {
         if (const FunctionDecl *Callee = CE->getDirectCallee()) {
-          if (functionContract(Callee) && !calleeIsSpec(Callee) &&
+          if (lowersToCall(Callee) && !calleeIsSpec(Callee) &&
               !calleeIsProof(Callee)) {
             std::vector<std::unique_ptr<VExpr>> Args;
             convertExecCallArgs(CE, Out, Args);
@@ -10015,7 +10155,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
       }
       if (convertLibraryCall(CE, Out, ""))
         return Out;
-      if (functionContract(Callee)) {
+      if (lowersToCall(Callee)) {
         std::vector<std::unique_ptr<VExpr>> Args;
         convertExecCallArgs(CE, Out, Args);
         bool IsProof = calleeIsProof(Callee);
@@ -10301,7 +10441,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         if (Target) {
           if (const auto *Call = dyn_cast<CallExpr>(RHS)) {
             const FunctionDecl *Callee = Call->getDirectCallee();
-            if (Callee && functionContract(Callee) && !calleeIsSpec(Callee) &&
+            if (Callee && lowersToCall(Callee) && !calleeIsSpec(Callee) &&
                 !calleeIsProof(Callee)) {
               std::vector<std::unique_ptr<VExpr>> Args;
               convertExecCallArgs(Call, Out, Args);
@@ -10325,7 +10465,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         const auto *Call =
             dyn_cast<CallExpr>(BO->getRHS()->IgnoreParenImpCasts());
         const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
-        if (Callee && functionContract(Callee) && !calleeIsSpec(Callee) &&
+        if (Callee && lowersToCall(Callee) && !calleeIsSpec(Callee) &&
             !calleeIsProof(Callee)) {
           std::vector<std::unique_ptr<VExpr>> Args;
           convertExecCallArgs(Call, Out, Args);
@@ -10507,7 +10647,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
           const auto *Call =
               dyn_cast<CallExpr>(VD->getInit()->IgnoreParenImpCasts());
           const FunctionDecl *Callee = Call ? Call->getDirectCallee() : nullptr;
-          if (Callee && functionContract(Callee) && !calleeIsSpec(Callee)) {
+          if (Callee && lowersToCall(Callee) && !calleeIsSpec(Callee)) {
             std::vector<std::unique_ptr<VExpr>> Args;
             convertExecCallArgs(Call, Out, Args);
             const std::string ResultTarget =
@@ -10713,7 +10853,7 @@ ASTConverter::convertStmtBody(const Stmt *S) {
             }
             continue;
           }
-          if (functionContract(Callee)) {
+          if (lowersToCall(Callee)) {
             std::vector<std::unique_ptr<VExpr>> Args;
             convertExecCallArgs(CE, Out, Args);
             const bool RecordResult = isFlattenedRecordType(VD->getType());

@@ -50,26 +50,20 @@ void copy(const int *a, int *out, int n)
 // VCR-NEXT: a
 // VCR-NEXT: post
 
-// A copy that writes zeros: its invariant fails where a holds anything else,
-// which the solver finds in 1.7 s (3.6 s with one job; a reversed copy took
-// 30 to 60 s). The first run's budget covers a slow runner, where the
-// default 30 s once ran out.
+// A copy that writes zeros fails where a holds anything else: separating
+// the extents does not hide it. The copy is of two cells, so finding the
+// counterexample needs no search through a loop invariant over a framed
+// heap, whose time depends on the solver's search order: with a loop it
+// took 1.7 s on Linux and, on a macOS runner, ran past 120 s.
 void wrong_copy(const int *a, int *out, int n)
-  cppverify::pre(n >= 0 && valid(a, n) && valid(out, n))
+  cppverify::pre(n == 2 && valid(a, n) && valid(out, n))
   cppverify::modifies(*out)
-  cppverify::post(cppverify::forall(i, 0, n, out[i] == a[i]))
+  cppverify::post(out[0] == a[0] && out[1] == a[1])
 {
-  int i = 0;
-  while (i < n)
-    cppverify::invariant(0 <= i && i <= n)
-    cppverify::invariant(cppverify::forall(j, 0, i, out[j] == a[j]))
-    cppverify::decreases(n - i)
-  {
-    out[i] = 0;
-    i = i + 1;
-  }
+  out[0] = 0;
+  out[1] = 0;
 }
-// DECIDED-DAG: verification failed: wrong_copy [invariant-preserved]
+// DECIDED-DAG: verification failed: wrong_copy [postcondition]
 // BV-DAG: {{verification failed|Unresolved}}: wrong_copy
 
 // The separation must not make the preconditions contradictory.

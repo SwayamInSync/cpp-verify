@@ -334,7 +334,8 @@ Automatic induction
 Unfolding a recursive spec a few levels settles claims about a few values.
 A claim about every ``n``, such as ``fibo(n) >= n - 1`` for all ``n >= 3``,
 needs induction: show it at ``n`` assuming it at smaller values. When
-unfolding leaves a claim unresolved (``spec.fuel``), the verifier tries
+unfolding leaves a claim unresolved (``spec.fuel``), or the solver cannot
+settle a lemma (a proof function) within its timeout, the verifier tries
 inductions by itself before reporting it:
 
 - **Following a recursive spec** that the claim applies (shown as
@@ -345,8 +346,32 @@ inductions by itself before reporting it:
   walking the definition: through the other specs of a mutual recursion, and
   for a call inside ``cppverify::forall`` or ``cppverify::exists``, at every value the quantifier
   ranges over.
-- **On an integer variable** (shown as ``on n``): strong induction, the claim
-  assumed at every smaller nonnegative value of ``n``.
+- **On an integer variable** (shown as ``on n``) that the claim passes to a
+  spec or uses as an index into memory: strong induction, the claim assumed
+  at every smaller value of ``n`` (from a nonnegative one).
+
+An order on adjacent elements is an order on all of them, by induction on
+the second index; the solver alone searches until its timeout:
+
+.. code-block:: cpp
+
+   cv::proof void ordered(const int *a, int n, int i, int j)
+     cv::pre(cv::valid(a, n))
+     cv::pre(cv::forall(k, 1, n, a[k - 1] <= a[k]))
+     cv::pre(0 <= i && i <= j && j < n)
+     cv::post(a[i] <= a[j])
+   {
+   }
+
+.. code-block:: text
+
+   Verified: ordered [backend=z3] [by induction on j]
+
+A lemma tried this way has first used its whole timeout, so it takes longer
+than one the solver settles: about a minute here with the default timeout,
+eight seconds with ``--timeout=2000``. An executable function is not tried:
+induction proves lemmas, and a function that relies on such a fact calls the
+lemma.
 
 Everything else stays fixed, and the assumption is the claim exactly as the
 function states it, so these never prove a false claim: the measure cannot

@@ -1,9 +1,9 @@
 // RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --implicit-check-not=error:
-// RUN: not %cpp-verify %s -- -DCALL 2>&1 | FileCheck %s --check-prefix=CALL
+// RUN: %cpp-verify %s -- -DCALL 2>&1 | FileCheck %s --check-prefix=CALL --implicit-check-not=error:
 // RUN: %cpp-verify %s -- -DSTATEMENT 2>&1 | FileCheck %s --check-prefix=STATEMENT
 //
-// A function template without contracts is not verified, and stops nothing
-// unless verified code calls it: that call is reported. One with contract
+// A function template without contracts is not verified on its own, and
+// stops nothing: verified code that calls it runs its body. One with contract
 // statements, as one with contracts, is verified in its specializations, and
 // one that nothing instantiates is reported, not verified.
 
@@ -25,8 +25,9 @@ int uses_twice(int x)
   return twice(x);
 }
 #endif
-// CALL: error: uses_twice: call to function without a verification contract: twice<int>
+// CALL: Verified: uses_twice [backend=z3]
 // CALL-NOT: function template verification
+// CALL-NOT: twice
 
 #ifdef STATEMENT
 template <class T> T checked(T v)
