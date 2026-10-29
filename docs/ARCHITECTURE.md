@@ -3051,9 +3051,14 @@ interrupt function. Every solver is created with Z3's `ctrl_c` parameter
 off: otherwise each check swaps Z3's own SIGINT handler in, Z3 keeps the
 handlers of concurrent checks in one unsynchronized stack, and Ctrl-C ran the
 handler of a finished check (a crash report, then a run that went on).
-Source-location annotation takes a lock, since
-the source manager caches its last lookup. Lean stays serial, and the
-compile-time verifier keeps a single job.
+Every source lookup made while functions are verified at once takes one
+lock, `Verifier::SourceLock`, in `sourceOf`, `annotateObligationSources`, and
+the notes of a failure, since the source manager caches its last lookups:
+before 0.2 the notes of a failure whose counterexample passes through a loop,
+which unroll the loop and annotate each bound's module, and the fallback of
+a failure's place looked up sources without it, a data race that
+ThreadSanitizer found (`suite/parallel_failure_notes.cpp`). Lean stays
+serial, and the compile-time verifier keeps a single job.
 
 cvc5 execution resolves an explicit `--cvc5-path` or searches `PATH`, writes one
 bounded temporary SMT-LIB2 query, invokes the executable without a shell under
