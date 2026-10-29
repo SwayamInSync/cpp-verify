@@ -948,6 +948,18 @@ misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Z3 releases pass a gate.** A Z3 release replaces the built-in one only when
+cpp-verify built with it loses nothing that 4.13.4 decides: no proof of a
+valid claim or model of a false one in the sequence benchmark, as the
+verifier poses them, and no proof or certified failure of any Verify test
+program, with no function Verified by one and Failed by the other
+(``clang/utils/cppverify-z3-gate``). CI runs the gate every week for Z3's
+newest release. 0.2 keeps Z3 4.13.4: 5.3.2, the newest, gains a proof in the
+benchmark and loses none there, but on the test programs it loses two proofs
+(``even_mod``, ``count_reverse``) and a certified failure
+(``break_heap_wrong`` ends ``solver.timeout`` after 66 s instead of failing in
+2 s), as 4.16.0 and 5.1.0 did.
+
 Data formats
 ~~~~~~~~~~~~
 
