@@ -162,9 +162,12 @@ cloneMemoryChecks(const std::vector<VMemoryCheck> &Checks);
 struct VAssertStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
   ProofObligationKind ProofKind;
+  /// For an unsupported obligation: what the verifier does not model here.
+  std::string Note;
   VAssertStmt(std::unique_ptr<VExpr> C, SourceLocation Loc,
-              ProofObligationKind ProofKind)
-      : VStmt(Assert, Loc), Cond(std::move(C)), ProofKind(ProofKind) {}
+              ProofObligationKind ProofKind, std::string Note = "")
+      : VStmt(Assert, Loc), Cond(std::move(C)), ProofKind(ProofKind),
+        Note(std::move(Note)) {}
 };
 
 struct VAssumeStmt : VStmt {

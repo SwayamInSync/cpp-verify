@@ -687,7 +687,10 @@ Libraries and real programs
 CppVerify does not yet ship comprehensive libc or C++ standard-library models:
 of the standard library it knows ``std::min`` and ``std::max`` of two
 integers (:doc:`functions-loops`), and any other of its functions is an
-error naming it. An uncontracted call fails closed; a contract is assumed
+error naming it. Of the C library it knows ``abs`` and the memory functions
+``memcpy``, ``memmove``, ``memset``, and ``memcmp`` over integers, through
+trusted models in ``<cppverify.h>`` that every proof using one names
+(:doc:`pointers`). An uncontracted call fails closed; a contract is assumed
 only when it is marked ``[[cppverify::trusted]]``, or, in one run over
 several files, once the verification of its definition in another of them
 establishes it, and for files verified apart once
@@ -699,7 +702,8 @@ verification contract``).
 
 Broader application verification needs:
 
-- memory/string primitives such as ``memcpy``, ``memmove``, and ``memset``;
+- the memory functions over records and pointers, and the string functions
+  (``strlen``, ``strcmp``);
 - views of standard containers as the spec collections of ``<cppverify.h>``;
 - ``std::array``, ``std::span``, smart pointers, optionals, and string views;
 - vectors, strings, associative containers, iterators, invalidation, and

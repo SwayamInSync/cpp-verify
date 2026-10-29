@@ -242,6 +242,23 @@ private:
   /// A call of a bit-counting or byte-swapping builtin, by its definition;
   /// nullopt for any other call.
   std::optional<std::unique_ptr<VExpr>> convertBitBuiltin(const CallExpr *CE);
+  /// The models of <cppverify.h> (cppverify::model) that converted calls
+  /// use, in the order of their first use.
+  std::vector<const FunctionDecl *> UsedLibraryModels;
+  /// The model named \p Name whose first parameter points to \p Element.
+  const FunctionDecl *libraryModel(llvm::StringRef Name,
+                                   QualType Element) const;
+  /// A call of memcpy, memmove, memset, or memcmp: a call of its model for
+  /// the objects its pointers address, into \p Out, with its result in
+  /// \p Result unless that is empty; the model, or null after an error.
+  /// Nothing for any other call.
+  std::optional<const FunctionDecl *>
+  convertLibraryCall(const CallExpr *CE,
+                     std::vector<std::unique_ptr<VStmt>> &Out,
+                     const std::string &Result);
+  /// abs, labs, llabs, and std::abs of an integer: its definition, in the
+  /// parameter's type (mathematical in a spec); nothing for any other call.
+  std::optional<std::unique_ptr<VExpr>> convertAbs(const CallExpr *CE);
   void noteSpecUse(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
   std::unique_ptr<VExpr> convertExprImpl(const Expr *E);

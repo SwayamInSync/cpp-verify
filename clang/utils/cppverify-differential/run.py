@@ -22,7 +22,8 @@ sys.path.insert(0, HERE)
 import differential  # noqa: E402
 
 SUITES = ['integers', 'shifts_division', 'contracts', 'loops', 'calls', 'pointers',
-          'pointers_bmc', 'expressions', 'loops_bmc', 'bit_int', 'records', 'selftest']
+          'pointers_bmc', 'expressions', 'loops_bmc', 'bit_int', 'records', 'library',
+          'selftest']
 DEFAULT = [s for s in SUITES if s != 'selftest']
 
 

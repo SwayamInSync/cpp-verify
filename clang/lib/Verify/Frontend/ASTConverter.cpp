@@ -949,6 +949,16 @@ VIntMode ASTConverter::specCallIntMode(const FunctionDecl *FD) const {
   return VIntMode::Math;
 }
 
+/// Whether \p FD is a model of <cppverify.h>, in cppverify::model.
+static bool isLibraryModel(const FunctionDecl *FD) {
+  const auto *Model = dyn_cast<NamespaceDecl>(FD->getDeclContext());
+  const auto *Verify =
+      Model ? dyn_cast<NamespaceDecl>(Model->getDeclContext()) : nullptr;
+  return Verify && Model->getName() == "model" &&
+         Verify->getName() == "cppverify" &&
+         Verify->getDeclContext()->isTranslationUnit();
+}
+
 /// For std::min(a, b) and std::max(a, b) of two integers, enumerations, or
 /// bools: whether it is max. Nothing for any other function, such as the
 /// overloads with a comparison or an initializer list.
@@ -2448,7 +2458,7 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
             FD->getQualifiedNameAsString() + ": " + *UnsupportedMember);
       continue;
     }
-    if (FD->isInStdNamespace())
+    if (FD->isInStdNamespace() || isLibraryModel(FD))
       continue;
     if (FD->isTemplateInstantiation()) {
       // Its diagnostics note where it is instantiated, as a compiler's do,
@@ -2502,6 +2512,14 @@ std::vector<std::unique_ptr<VFunction>> ASTConverter::convertTranslationUnit() {
     };
     Calls(FD->getBody());
   }
+  // The models the converted calls use, trusted by their callers, and quiet:
+  // the others are never converted.
+  for (const FunctionDecl *Model : UsedLibraryModels)
+    if (auto Fn = convertFunction(Model)) {
+      Fn->IsBuiltin = true;
+      Identities.insert(Fn->Identity);
+      Out.push_back(std::move(Fn));
+    }
   // An uncontracted constexpr definition is a spec once the lowered code
   // calls it: lift those the converted functions call, then those the lifted
   // ones call, in source order. The others (a header's, say) are never
@@ -4337,6 +4355,232 @@ std::unique_ptr<VExpr> ASTConverter::convertMinOrMax(const CallExpr *CE,
                                                    VType::makeBool(), Loc);
   return std::make_unique<VConditionalExpr>(std::move(Less), std::move(B),
                                             std::move(A), Ty, Loc);
+}
+
+const FunctionDecl *ASTConverter::libraryModel(llvm::StringRef Name,
+                                               QualType Element) const {
+  auto nested = [&](const DeclContext *DC,
+                    llvm::StringRef Inner) -> const NamespaceDecl * {
+    for (const NamedDecl *D : DC->lookup(&Ctx.Idents.get(Inner)))
+      if (const auto *NS = dyn_cast<NamespaceDecl>(D))
+        return NS;
+    return nullptr;
+  };
+  const NamespaceDecl *Verify =
+      nested(Ctx.getTranslationUnitDecl(), "cppverify");
+  const NamespaceDecl *Model = Verify ? nested(Verify, "model") : nullptr;
+  if (!Model)
+    return nullptr;
+  for (const NamedDecl *D : Model->lookup(&Ctx.Idents.get(Name)))
+    if (const auto *FD = dyn_cast<FunctionDecl>(D);
+        FD && FD->getNumParams() == 3 &&
+        Ctx.hasSameUnqualifiedType(
+            FD->getParamDecl(0)->getType()->getPointeeType(), Element))
+      return FD;
+  return nullptr;
+}
+
+/// A pointer argument as written, before its conversion to (const) void *.
+static const Expr *beforeVoidPointer(const Expr *E) {
+  E = E->IgnoreParens();
+  while (const auto *Cast = dyn_cast<ImplicitCastExpr>(E)) {
+    if (Cast->getCastKind() != CK_BitCast && Cast->getCastKind() != CK_NoOp)
+      break;
+    E = Cast->getSubExpr()->IgnoreParens();
+  }
+  return E;
+}
+
+std::optional<const FunctionDecl *>
+ASTConverter::convertLibraryCall(const CallExpr *CE,
+                                 std::vector<std::unique_ptr<VStmt>> &Out,
+                                 const std::string &Result) {
+  llvm::StringRef Name;
+  unsigned Pointers = 2;
+  switch (CE->getBuiltinCallee()) {
+  case Builtin::BImemcpy:
+  case Builtin::BI__builtin_memcpy:
+    Name = "memcpy";
+    break;
+  case Builtin::BImemmove:
+  case Builtin::BI__builtin_memmove:
+    Name = "memmove";
+    break;
+  case Builtin::BImemset:
+  case Builtin::BI__builtin_memset:
+    Name = "memset";
+    Pointers = 1;
+    break;
+  case Builtin::BImemcmp:
+  case Builtin::BI__builtin_memcmp:
+    Name = "memcmp";
+    break;
+  default:
+    return std::nullopt;
+  }
+  if (CE->getNumArgs() != 3)
+    return std::nullopt;
+  const SourceLocation Loc = CE->getExprLoc();
+  // The objects a pointer addresses as written; an enumeration's are its
+  // underlying integers.
+  auto element = [&](const Expr *Arg) -> QualType {
+    QualType T = beforeVoidPointer(Arg)->getType();
+    if (!T->isPointerType())
+      return QualType();
+    T = T->getPointeeType().getCanonicalType().getUnqualifiedType();
+    if (const auto *Enum = T->getAs<EnumType>())
+      T = Enum->getDecl()->getIntegerType().getCanonicalType();
+    return T->isIntegerType() ? T : QualType();
+  };
+  const QualType Element = element(CE->getArg(0));
+  // Objects of one size keep their bits; a bool holds only 0 or 1.
+  const FunctionDecl *Model = nullptr;
+  if (!Element.isNull()) {
+    const QualType Other = Pointers == 2 ? element(CE->getArg(1)) : Element;
+    if (!Other.isNull() && Ctx.getTypeSize(Other) == Ctx.getTypeSize(Element) &&
+        Other->isBooleanType() == Element->isBooleanType())
+      Model = libraryModel(Name, Element);
+  }
+  if (!Model) {
+    std::string Written;
+    llvm::raw_string_ostream OS(Written);
+    for (unsigned I = 0; I < Pointers; ++I)
+      OS << (I ? " and " : "") << "'"
+         << beforeVoidPointer(CE->getArg(I))
+                ->getType()
+                .getAsString(Ctx.getPrintingPolicy())
+         << "'";
+    error(CurrentFn->Name + ": " + Name.str() + " of " + Written +
+          " is unsupported: it is modeled for pointers to integers of one "
+          "size" +
+          (Name == "memset" ? " other than bool" : ""));
+    return nullptr;
+  }
+  for (unsigned I = 0; I < 3; ++I)
+    for (unsigned J = I + 1; J < 3; ++J)
+      if (orderDependent(CE->getArg(I), CE->getArg(J))) {
+        error(CurrentFn->Name +
+              ": C++ leaves the order of these call arguments open, and a "
+              "call or a write in one may change what another reads; make it "
+              "a statement of its own first");
+        return nullptr;
+      }
+  llvm::SaveAndRestore Sink(CallSink, &Out);
+  std::vector<std::unique_ptr<VExpr>> Args;
+  for (unsigned I = 0; I < 3; ++I) {
+    auto Arg = convertExpr(I < Pointers ? beforeVoidPointer(CE->getArg(I))
+                                        : CE->getArg(I));
+    if (!Arg)
+      return nullptr;
+    Args.push_back(std::move(Arg));
+  }
+  if (Name == "memset") {
+    // Each byte is (unsigned char)c, so each object is that byte repeated.
+    const uint64_t Width = Ctx.getTypeSize(Element);
+    const VType Object = VType::fromQualType(Element, VIntMode::Machine, Ctx);
+    const VType Byte =
+        VType::fromQualType(Ctx.UnsignedCharTy, VIntMode::Machine, Ctx);
+    VType Bits = Object;
+    Bits.IsSigned = false;
+    const VType Given = Args[1]->Ty;
+    std::unique_ptr<VExpr> Value =
+        std::make_unique<VCastExpr>(std::move(Args[1]), Given, Byte, Loc);
+    Value = std::make_unique<VCastExpr>(std::move(Value), Byte, Bits, Loc);
+    llvm::APInt Repeated(Width, 0);
+    for (uint64_t Bit = 0; Bit < Width; Bit += 8)
+      Repeated.setBit(Bit);
+    Value = std::make_unique<VBinOpExpr>(
+        VBinOp::Mul, std::move(Value),
+        std::make_unique<VLiteralExpr>(llvm::toString(Repeated, 10, false),
+                                       Bits, Loc),
+        Bits, Loc);
+    Args[1] = std::make_unique<VCastExpr>(std::move(Value), Bits, Object, Loc);
+  }
+  // Whole objects only: a size that splits one is defined C++ that the
+  // verifier's memory, an object to a cell, does not represent.
+  const uint64_t Size = Ctx.getTypeSizeInChars(Element).getQuantity();
+  if (Size != 1) {
+    const VType SizeTy = Args[2]->Ty;
+    auto literal = [&](uint64_t V) {
+      return std::make_unique<VLiteralExpr>(std::to_string(V), SizeTy, Loc);
+    };
+    Out.push_back(std::make_unique<VAssertStmt>(
+        std::make_unique<VBinOpExpr>(
+            VBinOp::Eq,
+            std::make_unique<VBinOpExpr>(VBinOp::Rem, cloneVExpr(Args[2].get()),
+                                         literal(Size), SizeTy, Loc),
+            literal(0), VType::makeBool(), Loc),
+        Loc, ProofObligationKind::Unsupported,
+        Name.str() + " of a size that splits an object"));
+    Args[2] = std::make_unique<VBinOpExpr>(VBinOp::Div, std::move(Args[2]),
+                                           literal(Size), SizeTy, Loc);
+  }
+  if (!llvm::is_contained(UsedLibraryModels, Model))
+    UsedLibraryModels.push_back(Model);
+  Out.push_back(atCall(
+      std::make_unique<VCallStmt>(functionName(Model), functionIdentity(Model),
+                                  std::move(Args), Result, Loc, false),
+      CE));
+  return Model;
+}
+
+std::optional<std::unique_ptr<VExpr>>
+ASTConverter::convertAbs(const CallExpr *CE) {
+  switch (CE->getBuiltinCallee()) {
+  case Builtin::BIabs:
+  case Builtin::BIlabs:
+  case Builtin::BIllabs:
+  case Builtin::BI__builtin_abs:
+  case Builtin::BI__builtin_labs:
+  case Builtin::BI__builtin_llabs:
+    break;
+  default: {
+    // std::abs of an integer, which a library may define inline: in std
+    // (libstdc++), or, for long and long long, in the global namespace of
+    // its <stdlib.h>, which <cstdlib> brings into std (libc++). A global abs
+    // of the user's own is a function like any other.
+    const FunctionDecl *Callee = CE->getDirectCallee();
+    if (!Callee ||
+        !(Callee->isInStdNamespace() ||
+          (Callee->getDeclContext()->getRedeclContext()->isTranslationUnit() &&
+           Ctx.getSourceManager().isInSystemHeader(Callee->getLocation()))) ||
+        !Callee->getIdentifier() ||
+        Callee->getName() != "abs" || Callee->getNumParams() != 1 ||
+        !Callee->getParamDecl(0)->getType()->isIntegerType() ||
+        !Ctx.hasSameType(Callee->getParamDecl(0)->getType(),
+                         Callee->getReturnType()))
+      return std::nullopt;
+  }
+  }
+  if (CE->getNumArgs() != 1)
+    return std::nullopt;
+  // In a spec the mathematical absolute value; elsewhere a function of
+  // machine integers, in a contract too, where -x overflows at the minimum.
+  const VType Parameter =
+      VType::fromQualType(CE->getArg(0)->getType(), IntMode, Ctx);
+  if (!Parameter.isInt() || !Parameter.IsSigned)
+    return std::nullopt;
+  auto Arg = convertExpr(CE->getArg(0));
+  if (!Arg)
+    return nullptr;
+  const SourceLocation Loc = CE->getExprLoc();
+  const VType Given = Arg->Ty;
+  if (evaluatedIntMode(Arg.get()) != Parameter.IntMode ||
+      Given.BitWidth != Parameter.BitWidth)
+    Arg = std::make_unique<VCastExpr>(std::move(Arg), Given, Parameter, Loc);
+  auto Negative = std::make_unique<VBinOpExpr>(
+      VBinOp::Lt, cloneVExpr(Arg.get()),
+      std::make_unique<VLiteralExpr>("0", Parameter, Loc), VType::makeBool(),
+      Loc);
+  auto Negated = std::make_unique<VUnaryOpExpr>(
+      VUnaryOp::Neg, cloneVExpr(Arg.get()), Parameter, Loc);
+  std::unique_ptr<VExpr> Value = std::make_unique<VConditionalExpr>(
+      std::move(Negative), std::move(Negated), std::move(Arg), Parameter, Loc);
+  const VType Result = VType::fromQualType(CE->getType(), IntMode, Ctx);
+  if (!sameRepresentation(Parameter, Result))
+    Value =
+        std::make_unique<VCastExpr>(std::move(Value), Parameter, Result, Loc);
+  return Value;
 }
 
 std::optional<std::unique_ptr<VExpr>>
@@ -7035,6 +7279,8 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       return convertExpr(CE->getArg(0));
     if (auto Builtin = convertBitBuiltin(CE))
       return std::move(*Builtin);
+    if (auto Absolute = convertAbs(CE))
+      return std::move(*Absolute);
     if (const FunctionDecl *Callee = CE->getDirectCallee()) {
       if (Callee->isConstexpr() && !functionContract(Callee) &&
           CE->isEvaluatable(Ctx)) {
@@ -7114,6 +7360,29 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
         if (rejectOwnObjectUse(CE))
           return nullptr;
         return hoistExecCall(CE, Callee);
+      }
+      if (CallSink && !InContractExpression && !InGhost && !CurrentFn->IsSpec &&
+          !CurrentFn->IsProof) {
+        const VType Ty = VType::fromQualType(E->getType(), IntMode, Ctx);
+        if (auto Hoisted = HoistedValues.find(CE);
+            Hoisted != HoistedValues.end())
+          return std::make_unique<VVarExpr>(
+              Hoisted->second.first, Hoisted->second.second, E->getExprLoc());
+        const std::string Temporary =
+            "__call_" + std::to_string(++NestedCallId);
+        if (auto Model = convertLibraryCall(CE, *CallSink, Temporary)) {
+          if (!*Model)
+            return nullptr;
+          auto Value = convertCallResultValue(
+              Temporary, (*Model)->getReturnType(), Ty, E->getExprLoc());
+          if (!Value)
+            return nullptr;
+          const std::string Read = "__value_" + std::to_string(++NestedCallId);
+          CallSink->push_back(std::make_unique<VAssignStmt>(
+              Read, std::move(Value), E->getExprLoc()));
+          HoistedValues[CE] = {Read, Ty};
+          return std::make_unique<VVarExpr>(Read, Ty, E->getExprLoc());
+        }
       }
       if (functionContract(Callee))
         error(CurrentFn->Name +
@@ -9751,6 +10020,8 @@ ASTConverter::convertStmtBody(const Stmt *S) {
         error(CurrentFn->Name + ": bare spec-call statement is unsupported");
         return Out;
       }
+      if (convertLibraryCall(CE, Out, ""))
+        return Out;
       if (functionContract(Callee)) {
         std::vector<std::unique_ptr<VExpr>> Args;
         convertExecCallArgs(CE, Out, Args);

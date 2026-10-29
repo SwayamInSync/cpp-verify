@@ -946,6 +946,19 @@ standard defines them ([alg.min.max]): `max(a, b)` is `a < b ? b : a` and
 Any other function of the standard library that is not a constant is an
 error naming it.
 
+Of the C library, `abs`, `labs`, `llabs`, and `std::abs` of an integer are
+their definition, undefined at the minimum, and in a spec the mathematical
+absolute value; libc++ defines the `std::abs` of `long` and `long long` in
+the global namespace of its `<stdlib.h>`, so a global `abs` declared in a
+system header is it too, and one of the user's own is not. `memcpy`, `memmove`, `memset`,
+and `memcmp` of objects of an integer type `T` (an enumeration as its
+underlying type, `bool` only with `bool`), with a size of `k * sizeof(T)`
+bytes, are calls of their models in `<cppverify.h>`: trusted declarations
+with contracts, one per type, over `k` objects (Frama-C's libc states the
+same over bytes, which this memory model, one value per object, does not
+have). A proof that uses one names it in `[trusts=...]`. A size that splits
+an object is `construct.unsupported`.
+
 **Compile-time partial evaluation:** When a contract contains a `constexpr` call whose arguments are all constants, Clang evaluates it at compile time before the verifier sees it. A callee precondition instantiated at a call site is not such a call: there the argument is substituted for the parameter, and the solver settles the application from the lifted definition:
 
 <!-- cppverify-example: fragment -->
