@@ -829,6 +829,20 @@ solver work (6 million Z3 resource units), with the timeout only as a bound
 in time, so it stops where it would on an idle machine
 (:doc:`language/tooling`).
 
+**Counterexamples at the end of a range, under load.** When the solver's
+first candidate needs a spec at a large argument, such as ``fibo(7310)`` for a
+claim false only at ``n == 1``, the verifier searches for the least and
+greatest values the argument may take and checks the models there. That
+search had half of a refinement slice of wall-clock time, 250 ms at
+``--timeout=10000``; an idle machine needs 12 ms for it, but a loaded one
+could run out, and the function ended ``Unresolved`` with ``spec.fuel``. On
+macOS CI that happened to ``strictly_grows`` in ``induction_schemes.cpp``,
+and with 32 runs sharing two cores to 10 of 32. The search now has a budget of
+solver work (2 million Z3 resource units) and of the CPU time of its own
+thread (the same half slice), which the load of other processes does not use
+up, so it stops where it would on an idle machine; all 32 runs fail with the
+counterexample (:doc:`language/tooling`).
+
 **cvc5 1.4.** Every query over sets, multisets, and maps failed with cvc5 1.4,
 which requires extended arrays for constant arrays; such a query now enables
 them itself. CI now runs the test suite with cvc5 1.1.2 and 1.4.2, and
