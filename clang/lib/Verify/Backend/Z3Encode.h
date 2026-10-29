@@ -82,9 +82,12 @@ class Z3Encoder {
   /// for a check of \p Ms milliseconds, then its assertions and the check.
   std::pair<std::string, std::string> dumpScript(z3::solver &S, unsigned Ms);
   z3::solver freshSolver();
-  /// \p S.check() within \p Ms milliseconds (0: no limit), unknown at once
-  /// after interrupt().
-  z3::check_result check(z3::solver &S, unsigned Ms);
+  /// \p S.check() within \p Ms milliseconds (0: no limit) and, given
+  /// \p CpuLimit, within that much CPU time of the calling thread; unknown at
+  /// once after interrupt().
+  z3::check_result
+  check(z3::solver &S, unsigned Ms,
+        std::optional<std::chrono::microseconds> CpuLimit = std::nullopt);
   /// A check outlived its time and was interrupted.
   bool Overran = false;
   std::mutex CheckLock;
@@ -251,13 +254,16 @@ class Z3Encoder {
   /// allows for the integer arguments of disputed applications, when it proves
   /// those values bounded. Covering a bounded domain this way takes a few
   /// checks instead of one round per value. \p Pin is set instead when such a
-  /// model is a real counterexample. The searches of the ends take turns until
-  /// \p Until, each check with an equal share of the time left.
-  std::vector<SpecDispute>
-  boundedDomainDisputes(const ObligationModule &Module, const LogicExpr &Query,
-                        const CertifyResult &Disputed, const z3::model &Model,
-                        std::chrono::steady_clock::time_point Until,
-                        std::optional<z3::expr> &Pin);
+  /// model is a real counterexample. The searches of the ends take turns,
+  /// each check with an equal share of what is left of DomainProbeUnits of
+  /// work and \p Time of the thread's CPU time, and none starts after
+  /// \p Deadline.
+  std::vector<SpecDispute> boundedDomainDisputes(
+      const ObligationModule &Module, const LogicExpr &Query,
+      const CertifyResult &Disputed, const z3::model &Model,
+      std::chrono::microseconds Time,
+      std::optional<std::chrono::steady_clock::time_point> Deadline,
+      std::optional<z3::expr> &Pin);
   friend class Z3CandidateModel;
   bool defineRecursiveFunctions();
   bool inlined(const LogicFunctionDecl &Function) const {

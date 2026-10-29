@@ -18,7 +18,7 @@
 # RUN:   | FileCheck %s --check-prefix=LEAN
 
 TEXT: per_function_errors.cpp:11:14: error: pick: throw is unsupported: exceptions are not modeled
-TEXT: per_function_errors.cpp:27:37: error: lookup: the global array 'table' is unsupported
+TEXT: per_function_errors.cpp:27:37: error: lookup: only integral, record, and array global variables are supported: table
 TEXT: per_function_errors.cpp:41:14: error: choice: throw is unsupported: exceptions are not modeled
 TEXT: per_function_errors.cpp:64:14: error: zero_lemma: throw is unsupported: exceptions are not modeled
 TEXT: per_function_errors.cpp:79:14: error: step: throw is unsupported: exceptions are not modeled
@@ -35,7 +35,7 @@ TEXT-NEXT: Summary: {{.*}}
 TEXT-NOT: {{.}}
 
 JSON: {"function":"pick",{{.*}}"message":"pick: throw is unsupported: exceptions are not modeled","reason":"construct.unsupported",{{.*}}"line":11},"status":"unresolved"}
-JSON: {"function":"lookup",{{.*}}"message":"lookup: the global array 'table' is unsupported","reason":"construct.unsupported",{{.*}}"status":"unresolved"}
+JSON: {"function":"lookup",{{.*}}"message":"lookup: only integral, record, and array global variables are supported: table","reason":"construct.unsupported",{{.*}}"status":"unresolved"}
 JSON-NEXT: {"function":"lookup",{{.*}}"message":"lookup: unsupported expression in pre",{{.*}}"status":"error"}
 JSON: {"backend":"z3","function":"uses_pick",{{.*}}"reason":"callee.contract",{{.*}}"status":"unresolved"}
 JSON: {"backend":"z3","function":"inc",{{.*}}"status":"verified"}
