@@ -403,6 +403,80 @@ problem, and those are exactly the places checked above: a verified callee
 returns, so ordinary calls cannot cut paths (a callee with
 ``cppverify::decreases(*)`` may not, and its callers are reported ``[partial]``).
 
+One more kind of assumption can cut a path: the facts the verifier adds
+about the specs a function applies. A spec's postcondition is assumed at
+each application, a recursive spec is unfolded by its definition, an
+inductive predicate by its rules, and a choice satisfies its condition.
+Each is proved before any proof may use it, so each should be a theorem;
+but if one were wrong, it could remove some paths and leave the others, and
+no check above would notice, since the function's end is still reached.
+Before 0.2 that happened: a spec that applied itself inside
+``cppverify::choose`` skipped its termination check, its definition
+contradicted itself at 7, and a function whose result was wrong exactly when
+its argument was 7 verified without a mark. So for every verified function
+that applies a spec, each branch, ``return``, loop body, and loop exit is
+checked: whether every fact together closes it, and if so, whether the code
+alone reaches it, with the specs' values left free and their facts removed
+(the preconditions, callee contracts, invariants, and checks stay). A point
+the code reaches and the facts close is reported, the first one only, since
+the points after it share its cause:
+
+.. cppverify-example: label tri
+
+.. code-block:: cpp
+
+   cv::spec int tri(int n)
+     cv::decreases(n)
+     cv::post(cv::result >= 0)
+   {
+     return n <= 0 ? 0 : tri(n - 1) + n;
+   }
+
+   int checked(int n, int t)
+     cv::pre(0 <= n && n <= 100 && t == tri(n))
+     cv::post(cv::result >= 0)
+   {
+     if (t < 0)      // tri's postcondition excludes this
+       return -1;
+     return t;
+   }
+
+.. code-block:: text
+
+   Verified: spec decreases and post: tri
+   Verified: checked [backend=z3]
+   vacuity.cpp:12:3: warning: checked: the facts about tri contradict the path to
+     the true branch here, which the code alone reaches, so every claim on that
+     path holds vacuously; either the path cannot happen, and it is dead code,
+     or a fact about tri is wrong
+
+Here the path cannot happen: ``tri``'s postcondition is proved, and the
+branch is dead. The result is not marked ``[vacuous]``, because the verifier
+cannot tell the two cases apart; the warning says where to look. To keep the
+branch, say why it is dead where it is, with a check, which is proved from
+the same fact and then stays in the code's own reasoning:
+
+.. cppverify-example: with tri
+
+.. code-block:: cpp
+
+   int stated(int n, int t)
+     cv::pre(0 <= n && n <= 100 && t == tri(n))
+     cv::post(cv::result >= 0)
+   {
+     cv::check(t >= 0);
+     if (t < 0)
+       return -1;
+     return t;
+   }
+
+A branch that the preconditions close, as ``if (p == nullptr)`` above, or
+that the definition of a spec without recursion closes (its body replaces
+each application, so it is part of the code), is not reported. The search is
+a warning's, not a proof's: a function's points share the time of one
+vacuity check, about a second, so in a long function whose queries are slow
+it may end before it reaches the point.
+
 A finding that no execution reaches a claim rests on the facts its query
 uses, as a proof does. When a result is ``Unresolved`` because one of those
 facts is not established, the finding is dropped where the missing fact may

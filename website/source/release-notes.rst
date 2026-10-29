@@ -544,6 +544,15 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Source lookups from parallel failures.** With more than one job, a failure
+whose counterexample passes through a loop gets notes from unrolling the
+loop, and those looked up source lines without the lock that the other
+lookups take, while other functions looked up theirs; so did a failure's
+place when its source was not recorded. The source manager caches its last
+lookup, so this was a data race on that cache, which ThreadSanitizer found
+and which could misplace a note or a check. Every lookup made while functions
+are verified at once now takes the lock.
+
 **Induction for lemmas that time out.** The automatic inductions ran only
 when unfolding a recursive spec could not settle a claim, so a lemma such as
 "an order on adjacent elements is an order on all of them" ended
@@ -551,6 +560,18 @@ when unfolding a recursive spec could not settle a claim, so a lemma such as
 now tried by induction too, including strong induction on a variable that
 indexes memory (``[by induction on j]``); an executable function is not
 (:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
+**Paths that the facts about specs close.** The vacuity checks asked whether
+anything reaches a verified function's end, so an assumption that removed
+only some paths went unnoticed: the contradictory definition of a spec
+recursive through ``cppverify::choose`` made one argument impossible and its
+function verified without a mark. The facts the verifier adds about specs
+are proved before use, so one that is wrong is a bug in the verifier; now,
+for every verified function that applies a spec, the first branch,
+``return``, loop body, or loop exit that those facts close but the code alone
+reaches gets a warning, which says that the code is dead or a fact is wrong.
+A ``cppverify::check`` of the fact before it keeps a dead branch on purpose
+(:doc:`book/part-ii/ch16-when-verification-fails`).
 
 **Verification in a build.** ``clang++ -fverify-contracts`` verified every
 file with the defaults (Z3, 30 seconds a query, one job), and each file
@@ -562,6 +583,14 @@ directory), and ``-fverify-report`` (the results as JSON Lines beside each
 object, or ``-fverify-report=<file>``); a file without a function to verify
 says nothing, and the reference shows a CMake recipe, with ``-fno-verify``
 for fast development builds (:doc:`language/tooling`).
+
+**Verification before code generation.** ``clang++ -fverify-contracts``
+verified on a thread of its own while it generated code from the same AST,
+and code generation fills caches of the AST and of the source manager that
+the verifier reads: a ThreadSanitizer build of Clang reported races on type
+sizes, linkage, and source lines in 4 of 4 compilations of a file with
+contracts and templates. A compilation now verifies first, and a failure
+stops it before any code is generated.
 
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
