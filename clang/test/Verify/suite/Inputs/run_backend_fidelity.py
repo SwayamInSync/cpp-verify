@@ -93,14 +93,41 @@ def fail(message):
     raise AssertionError(message)
 
 
-def run(command, expected_codes, timeout=180):
-    process = subprocess.run(
-        [str(argument) for argument in command],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=timeout,
+# A guard against a hang, not a budget. cpp-verify gives each lake step of a
+# Lean build or certification 300 seconds, so a command that runs Lean gets
+# more than that.
+TIMEOUT = 180
+LEAN_TIMEOUT = 900
+
+
+def runs_lean(command):
+    return pathlib.Path(str(command[0])).name == "lake" or any(
+        str(argument).startswith(("--backend=lean", "--lean-"))
+        for argument in command
     )
+
+
+def run(command, expected_codes):
+    timeout = LEAN_TIMEOUT if runs_lean(command) else TIMEOUT
+    try:
+        process = subprocess.run(
+            [str(argument) for argument in command],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        output = error.output or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        fail(
+            "command timed out after {} seconds:\n{}\n{}".format(
+                timeout,
+                " ".join(str(argument) for argument in command),
+                output[-8000:],
+            )
+        )
     if process.returncode not in expected_codes:
         fail(
             "command returned {} instead of {}:\n{}\n{}".format(
