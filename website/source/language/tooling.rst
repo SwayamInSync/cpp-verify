@@ -1528,7 +1528,12 @@ certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
-declarations, duplicate identities, and oversized/deep expressions.
+declarations, duplicate identities, and oversized/deep expressions. An
+archive is untrusted input, and libFuzzer runs the reader every night under
+AddressSanitizer (``cpp-verify-archive-fuzzer``): any byte string must be
+rejected with an error or decode to modules that validate, that the writer
+states again byte for byte with the same hashes, whose canonical form is a
+fixpoint, and that the Z3, cvc5, and Lean adapters lower.
 Schema v2 adds the precise obligation kinds; schema v3 each spec function's
 termination measures, read like its definition, and, with source metadata,
 where each assumption of a goal comes from, which names a hypothesis of a
