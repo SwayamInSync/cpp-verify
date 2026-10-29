@@ -3009,13 +3009,22 @@ class Verifier {
   }
 
   /// The source from BeginLoc to the end of the token at EndLoc, anchored at
-  /// Loc; in a macro, the source of its use. Empty when Loc has none.
+  /// Loc, where Clang's diagnostics show it: in a macro's argument where the
+  /// argument is written, elsewhere in a macro where the macro is used. Empty
+  /// when Loc has none.
   ObligationSource sourceOf(SourceLocation Loc, SourceLocation BeginLoc,
                             SourceLocation EndLoc) const {
     const SourceManager &SourceMgr = Ctx.getSourceManager();
     ObligationSource Found;
     if (!Loc.isValid())
       return Found;
+    // The range written in one place, such as one macro argument, maps to
+    // that place; another range in a macro to the macro's use.
+    const CharSourceRange Written = Lexer::makeFileCharRange(
+        CharSourceRange::getTokenRange(BeginLoc.isValid() ? BeginLoc : Loc,
+                                       EndLoc.isValid() ? EndLoc : Loc),
+        SourceMgr, Ctx.getLangOpts());
+    Loc = SourceMgr.getFileLoc(Loc);
     PresumedLoc Location = SourceMgr.getPresumedLoc(Loc);
     if (!Location.isValid())
       return Found;
@@ -3033,7 +3042,9 @@ class Verifier {
     if (Last.isMacroID())
       Last = SourceMgr.getExpansionRange(Last).getEnd();
     SourceLocation After =
-        Lexer::getLocForEndOfToken(Last, 0, SourceMgr, Ctx.getLangOpts());
+        Written.isValid()
+            ? Written.getEnd()
+            : Lexer::getLocForEndOfToken(Last, 0, SourceMgr, Ctx.getLangOpts());
     PresumedLoc End = SourceMgr.getPresumedLoc(After.isValid() ? After : Last);
     if (inFile(End) &&
         !before(End.getLine(), End.getColumn(), Found.Line, Found.Column)) {
@@ -3044,7 +3055,9 @@ class Verifier {
       Found.EndColumn = Found.Column;
     }
     if (BeginLoc.isValid()) {
-      if (BeginLoc.isMacroID())
+      if (Written.isValid())
+        BeginLoc = Written.getBegin();
+      else if (BeginLoc.isMacroID())
         BeginLoc = SourceMgr.getExpansionRange(BeginLoc).getBegin();
       PresumedLoc Begin = SourceMgr.getPresumedLoc(BeginLoc);
       if (inFile(Begin) && before(Begin.getLine(), Begin.getColumn(),
@@ -3769,7 +3782,8 @@ public:
       auto failureNotes = [&](const VFunction &F, const VerifyResult &Failure) {
         std::vector<std::string> Notes;
         auto at = [&](SourceLocation Loc) {
-          const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(Loc);
+          const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(
+              Ctx.getSourceManager().getFileLoc(Loc));
           return Where.isValid() ? std::to_string(Where.getLine()) + ":" +
                                        std::to_string(Where.getColumn())
                                  : std::string("?");
@@ -5510,7 +5524,8 @@ public:
         continue;
       AllOk = false;
       const SourceLocation Loop = It->second->UnmeasuredLoop;
-      const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(Loop);
+      const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(
+          Ctx.getSourceManager().getFileLoc(Loop));
       Diagnostic.K = VerifyDiagnostic::Unresolved;
       Diagnostic.Loc = Loop;
       Diagnostic.Message +=
@@ -6160,7 +6175,8 @@ public:
     for (const auto &Fn : Functions)
       if (Fn->DivergenceLoc.isValid()) {
         const PresumedLoc Where =
-            Ctx.getSourceManager().getPresumedLoc(Fn->DivergenceLoc);
+            Ctx.getSourceManager().getPresumedLoc(
+                Ctx.getSourceManager().getFileLoc(Fn->DivergenceLoc));
         Diverges[Fn->Identity] =
             "cppverify::decreases(*) at " +
             (Where.isValid() ? std::to_string(Where.getLine()) + ":" +
@@ -6614,7 +6630,8 @@ public:
       if (Loc.isInvalid())
         if (auto It = DeclLocOf.find(D.FunctionName); It != DeclLocOf.end())
           Loc = It->second;
-      if (const PresumedLoc Where = SM.getPresumedLoc(Loc); Where.isValid())
+      if (const PresumedLoc Where = SM.getPresumedLoc(SM.getFileLoc(Loc));
+          Where.isValid())
         Location = std::string(Where.getFilename()) + ":" +
                    std::to_string(Where.getLine()) + ":" +
                    std::to_string(Where.getColumn());
@@ -6647,7 +6664,8 @@ public:
 
   void printDiagnostics(llvm::raw_ostream &OS) const {
     for (const auto &[Loc, Line] : Listing) {
-      PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(Loc);
+      PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(
+          Ctx.getSourceManager().getFileLoc(Loc));
       if (PLoc.isValid())
         OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
            << PLoc.getColumn() << ": ";
@@ -6775,11 +6793,11 @@ public:
       }
     }
     Parts.push_back(Error);
-    // A step inside a macro is shown where the macro is used: the error
-    // already shows the expansion, and each note would repeat it.
+    // A step inside a macro is shown where it is written, in the macro's
+    // argument, or else where the macro is used: the error already shows the
+    // expansion, and each note would repeat it.
     auto note = [&](SourceLocation Loc, std::string Message) {
-      if (Loc.isMacroID())
-        Loc = Ctx.getSourceManager().getExpansionLoc(Loc);
+      Loc = Ctx.getSourceManager().getFileLoc(Loc);
       Parts.push_back({DiagnosticsEngine::Note, Loc, {}, std::move(Message)});
     };
     if (D.Result && D.Result->Status == VerifyStatus::Failed)
@@ -6963,7 +6981,8 @@ public:
     }
     for (const VerifyDiagnosticPart &Part : Parts) {
       if (Part.Loc.isValid()) {
-        PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(Part.Loc);
+        PresumedLoc PLoc = Ctx.getSourceManager().getPresumedLoc(
+            Ctx.getSourceManager().getFileLoc(Part.Loc));
         if (PLoc.isValid())
           OS << PLoc.getFilename() << ":" << PLoc.getLine() << ":"
              << PLoc.getColumn() << ": ";
