@@ -526,6 +526,14 @@ are errors at the statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Induction for lemmas that time out.** The automatic inductions ran only
+when unfolding a recursive spec could not settle a claim, so a lemma such as
+"an order on adjacent elements is an order on all of them" ended
+``solver.timeout``. A lemma the solver cannot settle within its timeout is
+now tried by induction too, including strong induction on a variable that
+indexes memory (``[by induction on j]``); an executable function is not
+(:doc:`book/part-ii/ch13-spec-and-proof-functions`).
+
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
 the first column of its last token, compiler errors stayed text, and nothing
