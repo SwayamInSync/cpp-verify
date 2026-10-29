@@ -156,7 +156,11 @@ and possibly new failures, to source that did not change:
 - static locals with a constant initializer, which were errors: each is its
   function's own state, with any value at entry, so a claim that relied on
   its initializer now fails; one initialized by running code, or whose
-  address is taken, stays an error (:doc:`language/pointers`).
+  address is taken, stays an error (:doc:`language/pointers`);
+- C++20 rewritten comparisons, which were unsupported: ``a != b`` with only
+  ``operator==`` declared, or ``5 == r`` with only ``R::operator==(int)``, is
+  the call C++20 rewrites it to, checked against that operator's contract
+  (:doc:`language/structs`).
 
 **One unsupported construct costs its function.** In 0.1.1 it stopped the
 file, with no verdicts. Now that function is ``Unresolved`` with reason
@@ -168,6 +172,16 @@ several places, among them a loop that never repeats (``do { ... } while
 (0)``), null minus null, signed left shifts under ``-std=c++20``, values read
 through ``new`` pointers, slices passed through a copy, and callee frames
 inside the caller's. These verify now; nothing needs changing.
+
+**A warning where facts about specs close a path.** In a verified function
+that applies a spec, the first branch, ``return``, loop body, or loop exit
+that the code alone reaches but the facts the verifier adds about specs
+close gets a warning, ``the facts about f contradict the path to ...``: the
+code there is dead, or a fact is wrong. The verdict stays the same, but a
+compilation with ``-Werror`` or ``-Werror=cppverify`` now fails on it. Keep
+such a branch with a ``cv::check`` of the fact before it, which the code's
+own reasoning then uses, or remove it
+(:doc:`book/part-ii/ch16-when-verification-fails`).
 
 **Budgets.** A function's complete query gets a fixed amount of solver work
 (6 million Z3 resource units) instead of 500 ms, with ``--timeout`` as the
@@ -239,8 +253,11 @@ and the steps of its path:
 0.1.1 printed one line for it, of the form ``verification failed: f
 [fn_...::overflow@4:3] (counterexample: x [ssa=x_0] [type=i32] = ...;
 trace: ...)``. A run now ends with a ``Summary:`` line, and the ``Verified:
-spec axiom`` lines need ``--verbose``. Anything that reads the text output
-needs updating; JSON is the format meant for tools.
+spec axiom`` lines need ``--verbose``. An unsupported construct is named as
+C++ names it, once (``throw is unsupported: exceptions are not modeled``,
+``lambdas are unsupported``), where 0.1.1 gave Clang's class name
+(``unsupported statement: CXXThrowExpr``). Anything that reads the text
+output needs updating; JSON is the format meant for tools.
 
 **Compile-time verification** (``clang++ -fverify-contracts``) reports each
 result as a diagnostic of its own: a failure or an unresolved result is an
