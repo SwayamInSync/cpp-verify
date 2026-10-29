@@ -1,3 +1,5 @@
+# REQUIRES: cpp-verify-archive-fuzzer
+#
 # Archives are untrusted input (--obligation-in). The archive fuzzer's target
 # (clang/tools/cpp-verify-archive-fuzzer) checks that an archive is rejected
 # with an error or decodes to modules that validate, that the writer states
