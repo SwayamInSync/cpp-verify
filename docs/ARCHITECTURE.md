@@ -3586,6 +3586,17 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   `.github/workflows/cppverify-fuzz.yml`; `suite/archive_fuzzer.test` runs it
   on archives of the test programs.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
+- Z3 gate: `clang/utils/cppverify-z3-gate/gate.sh BASE CANDIDATE` compares
+  two builds that differ in their Z3. Stage 1 solves the sequence benchmark
+  (`seqbench.py`, from the sequence-encoding study) in the production
+  encoding (NT) and the plain sequence theory (N), and judges each claim as
+  the verifier decides it, by NT with one job and by NT or N with more, where
+  they race; stage 2 verifies every Verify test program with both at one job
+  (`differential.py`). Losing a proof or a certified failure, or a function
+  Verified by one and Failed by the other, fails the gate; gains and time
+  changes are reported. `.github/workflows/cppverify-z3-gate.yml` runs it
+  weekly for Z3's newest release.
+
 - Sanitizers: `-DCPPVERIFY_SANITIZER="address;undefined"` builds
   `clangVerify` and `cpp-verify` with AddressSanitizer and
   UndefinedBehaviorSanitizer beside an uninstrumented LLVM, Clang, and Z3,

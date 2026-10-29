@@ -1,0 +1,138 @@
+name: CppVerify Z3 gate
+
+# A Z3 release is adopted only through this gate
+# (clang/utils/cppverify-z3-gate): cpp-verify is built with the vendored Z3
+# and with the candidate, and gate.sh compares the two on the sequence
+# benchmark and on every Verify test program. Every Monday it tests Z3's
+# newest release; run it by hand for any tag.
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  # A change to the gate runs it.
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/cppverify-z3-gate.yml
+      - clang/utils/cppverify-z3-gate/**
+  workflow_dispatch:
+    inputs:
+      z3_tag:
+        description: Z3 tag to test, such as z3-5.3.2 (default the newest release)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    name: Choose the candidate
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.z3_tag }}
+        run: |
+          tag=${REQUESTED:-$(gh api repos/Z3Prover/z3/releases/latest --jq .tag_name)}
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "candidate: $tag"
+
+  build:
+    name: Build (${{ matrix.role }})
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      matrix:
+        role: [base, candidate]
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_COMPRESS: "1"
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache
+
+      # The tag is Z3's to name, so the shell reads it as data.
+      - name: Fetch the candidate Z3
+        if: matrix.role == 'candidate'
+        env:
+          TAG: ${{ needs.candidate.outputs.tag }}
+        run: |
+          git clone --depth 1 --branch "$TAG" \
+            https://github.com/Z3Prover/z3.git "$RUNNER_TEMP/z3"
+          echo "Z3_SOURCE=-DCPPVERIFY_Z3_SOURCE_DIR=$RUNNER_TEMP/z3" >> "$GITHUB_ENV"
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-linux-z3gate-${{ matrix.role }}-${{ github.sha }}
+          restore-keys: ccache-linux-z3gate-${{ matrix.role }}-
+
+      - name: Configure
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=Native \
+            -DCPPVERIFY_VENDOR_Z3=ON \
+            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF \
+            -DLLVM_ENABLE_ASSERTIONS=OFF \
+            -DLLVM_CCACHE_BUILD=ON ${Z3_SOURCE:-}
+
+      - name: Build
+        run: ninja -C build cpp-verify
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .ccache
+          key: ccache-linux-z3gate-${{ matrix.role }}-${{ github.sha }}
+
+      - name: Package
+        run: |
+          build/bin/cpp-verify --version
+          tar -czf ${{ matrix.role }}.tar.gz build/bin/cpp-verify build/lib/clang \
+            build/cppverify-z3/install/bin/z3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.role }}
+          path: ${{ matrix.role }}.tar.gz
+
+  gate:
+    name: Gate (${{ needs.candidate.outputs.tag }})
+    needs: [candidate, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+
+      - name: Unpack
+        run: |
+          for role in base candidate; do
+            mkdir -p "$role" && tar -xzf "$role/$role.tar.gz" -C "$role"
+          done
+
+      - name: Run the gate
+        run: clang/utils/cppverify-z3-gate/gate.sh base/build candidate/build results
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-results
+          path: results/
