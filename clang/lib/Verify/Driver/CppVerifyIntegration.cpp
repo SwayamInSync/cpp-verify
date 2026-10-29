@@ -5,6 +5,7 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include <limits>
+#include "llvm/Support/IOSandbox.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
@@ -56,6 +57,10 @@ bool verify::runCppVerify(CompilerInstance &CI, ASTContext &Ctx) {
   VerifyOptions Opts = compilationOptions(CI.getFrontendOpts());
   std::vector<VerifyDiagnosticPart> Parts;
   Opts.Parts = &Parts;
+  // The verifier reads and writes files (the proof cache, the report, the
+  // contracts it records) and runs solvers, as the static analyzer writes its
+  // reports, outside the compilation's file system.
+  auto BypassSandbox = llvm::sys::sandbox::scopedDisable();
   const bool Ok = verifyTranslationUnit(Ctx, llvm::nulls(), Opts);
   DiagnosticsEngine &Diags = CI.getDiagnostics();
   bool Reported = false;
