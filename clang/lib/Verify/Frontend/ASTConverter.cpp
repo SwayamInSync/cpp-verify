@@ -14,9 +14,11 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtContract.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/SourceManager.h"
+#include "clang/Lex/Lexer.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringSet.h"
@@ -2329,9 +2331,25 @@ static bool hasExtentMarker(const FunctionContractInfo &FCI,
   return F.Found;
 }
 
+/// The source text of \p S on its first line, for a message that quotes it.
+static std::string quotedSource(const Stmt *S, const ASTContext &Ctx) {
+  const SourceManager &SM = Ctx.getSourceManager();
+  StringRef Text = Lexer::getSourceText(
+      SM.getExpansionRange(S->getSourceRange()), SM, Ctx.getLangOpts());
+  Text = Text.take_until([](char C) { return C == '\n' || C == '\r'; }).rtrim();
+  if (Text.empty())
+    return "";
+  constexpr size_t Shown = 40;
+  if (Text.size() > Shown)
+    return "`" + Text.take_front(Shown).rtrim().str() + "...`";
+  return "`" + Text.str() + "`";
+}
+
 /// What a statement or expression the verifier does not represent is, in
-/// C++'s terms.
-static std::string unsupportedConstruct(const Stmt *S) {
+/// C++'s terms: its kind where C++ names it, else its own text.
+static std::string unsupportedConstruct(const Stmt *S, const ASTContext &Ctx) {
+  if (isa<OMPExecutableDirective>(S))
+    return "OpenMP directives are unsupported";
   switch (S->getStmtClass()) {
   case Stmt::GotoStmtClass:
     return "goto is unsupported";
@@ -2354,9 +2372,41 @@ static std::string unsupportedConstruct(const Stmt *S) {
     return "a compound literal is unsupported";
   case Stmt::LambdaExprClass:
     return "lambdas are unsupported";
-  default:
+  case Stmt::CoroutineBodyStmtClass:
+  case Stmt::CoreturnStmtClass:
+  case Stmt::CoawaitExprClass:
+  case Stmt::DependentCoawaitExprClass:
+  case Stmt::CoyieldExprClass:
+    return "coroutines are unsupported";
+  case Stmt::SEHTryStmtClass:
+  case Stmt::SEHExceptStmtClass:
+  case Stmt::SEHFinallyStmtClass:
+  case Stmt::SEHLeaveStmtClass:
+    return "__try is unsupported: structured exception handling is not modeled";
+  case Stmt::AtomicExprClass:
+    return "atomic operations are unsupported: the memory model of threads is "
+           "not modeled";
+  case Stmt::CXXTypeidExprClass:
+    return "typeid is unsupported";
+  case Stmt::CXXDynamicCastExprClass:
+    return "dynamic_cast is unsupported";
+  case Stmt::VAArgExprClass:
+    return "va_arg is unsupported";
+  case Stmt::CXXUuidofExprClass:
+    return "__uuidof is unsupported";
+  case Stmt::ConvertVectorExprClass:
+  case Stmt::ShuffleVectorExprClass:
+  case Stmt::ExtVectorElementExprClass:
+    return "vector operations are unsupported";
+  case Stmt::MatrixSubscriptExprClass:
+    return "matrix types are unsupported";
+  case Stmt::CXXPseudoDestructorExprClass:
+    return "a destructor call of a scalar is unsupported";
+  default: {
+    std::string Quoted = quotedSource(S, Ctx);
     return std::string(isa<Expr>(S) ? "this expression" : "this statement") +
-           " is unsupported (" + S->getStmtClassName() + ")";
+           (Quoted.empty() ? "" : " " + Quoted) + " is unsupported";
+  }
   }
 }
 
@@ -6768,6 +6818,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return convertExpr(Default->getExpr());
   if (const auto *Default = dyn_cast<CXXDefaultInitExpr>(E))
     return convertExpr(Default->getExpr());
+  // A comparison C++20 rewrites in terms of another operator (`a != b`
+  // through `operator==`, or `b == a` reversed) is what it is rewritten to.
+  if (const auto *Rewritten = dyn_cast<CXXRewrittenBinaryOperator>(E))
+    return convertExpr(Rewritten->getSemanticForm());
   // A constant Clang evaluates (a consteval call, an if constexpr
   // condition), a character literal, and an expression that evaluates
   // nothing at run time (noexcept, a requires-expression, a concept, a type
@@ -7620,7 +7674,7 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
       return nullptr;
     }
   }
-  error(CurrentFn->Name + ": " + unsupportedConstruct(E));
+  error(CurrentFn->Name + ": " + unsupportedConstruct(E, Ctx));
   return nullptr;
 }
 
@@ -10385,6 +10439,10 @@ ASTConverter::convertStmtBody(const Stmt *S) {
               ": call to function without a verification contract: " +
               functionName(Callee));
       }
+    } else if (isa<CXXPseudoDestructorExpr>(
+                   CE->getCallee()->IgnoreParenImpCasts())) {
+      error(CurrentFn->Name + ": " +
+            unsupportedConstruct(CE->getCallee()->IgnoreParenImpCasts(), Ctx));
     } else {
       error(CurrentFn->Name + ": indirect function calls are unsupported");
     }
@@ -11131,6 +11189,6 @@ ASTConverter::convertStmtBody(const Stmt *S) {
     appendDiscarded(E, Out);
     return Out;
   }
-  error(CurrentFn->Name + ": " + unsupportedConstruct(S));
+  error(CurrentFn->Name + ": " + unsupportedConstruct(S, Ctx));
   return Out;
 }

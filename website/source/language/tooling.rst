@@ -1168,7 +1168,10 @@ a fixed amount of solver work (Z3 resource units), with the query timeout
 only as a bound in time, so on a loaded machine it stops where it stops on
 an idle one, unless the timeout passes first; once it has found a
 counterexample, the obligations that choose the failure to report get the
-same work each. Lean generation stays serial; ``cppverify_auto`` and
+same work each. Likewise, the search for the least and greatest values of a
+spec's argument, which finds a counterexample at the end of its range, is
+bounded by solver work and by the CPU time of its own thread, which the load
+of other processes does not use up. Lean generation stays serial; ``cppverify_auto`` and
 certification run Lean processes side by side; what they find does not depend
 on how many, but a goal whose automation is near ``--lean-auto-timeout`` may
 finish in time under one load and not under another. The compile-time
@@ -1457,12 +1460,25 @@ Every ``Verified`` result is checked at each:
    * - A trusted contract cannot hold in the state of one call.
      - ``f: the trusted contract of g contradicts the state of this call, so
        everything after it holds vacuously``, at the call
+   * - The facts about the specs ``f`` applies close a branch, ``return``,
+       loop body, or loop exit that its code alone reaches.
+     - ``f: the facts about s contradict the path to the true branch here,
+       which the code alone reaches, so every claim on that path holds
+       vacuously; either the path cannot happen, and it is dead code, or a
+       fact about s is wrong``, at the first such point (the result itself
+       is not ``[vacuous]``)
 
 A verified callee always returns, so only a trusted contract can end the
 paths through a call. Unreachable code itself is not flagged: a defensive
 ``if (p == nullptr) return -1;`` under ``cppverify::pre(p != nullptr)`` is dead for a
 good reason, and every claim the function makes is still checked on the
-paths that remain.
+paths that remain. The exception is code that only the facts about specs
+make dead (a spec's postcondition, a recursive spec's definition, an
+inductive predicate's unfolding, a frame, a choice's axiom): those facts
+are proved, so the code is most likely dead, but a wrong fact would hide
+paths in exactly this way, so the first such point is reported. A
+``cppverify::check`` of the fact before the point states it in the code and
+silences the warning (see :doc:`../book/part-ii/ch16-when-verification-fails`).
 
 Combining JSON or SARIF with IR dumps intentionally creates a mixed stream.
 Malformed byte sequences in source or archive display text are rendered with
@@ -1528,7 +1544,12 @@ certifies (:doc:`../book/part-ii/ch17-backends-modular-calls`).
 serialize/deserialize/validate/reserialize checks. Stable wire tags make the
 format independent of C++ enum ordinals. The reader rejects malformed magic,
 unsupported versions, truncation, invalid tags, inconsistent feature
-declarations, duplicate identities, and oversized/deep expressions.
+declarations, duplicate identities, and oversized/deep expressions. An
+archive is untrusted input, and libFuzzer runs the reader every night under
+AddressSanitizer (``cpp-verify-archive-fuzzer``): any byte string must be
+rejected with an error or decode to modules that validate, that the writer
+states again byte for byte with the same hashes, whose canonical form is a
+fixpoint, and that the Z3, cvc5, and Lean adapters lower.
 Schema v2 adds the precise obligation kinds; schema v3 each spec function's
 termination measures, read like its definition, and, with source metadata,
 where each assumption of a goal comes from, which names a hypothesis of a
