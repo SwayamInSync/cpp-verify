@@ -4236,11 +4236,46 @@ class PassivizerImpl {
     return true;
   }
 
-  /// The element offset c of a slice actual `base + S*c` that a quantifier
-  /// indexes as `(base + S*c) + S*j`.
-  static const VExpr *sliceOffset(const VExpr *E, const std::string &Binder) {
-    if (!E)
-      return nullptr;
+  /// Whether two offsets are the same term, by structure.
+  static bool sameOffset(const VExpr *A, const VExpr *B) {
+    if (!A || !B || A->K != B->K)
+      return false;
+    switch (A->K) {
+    case VExpr::Literal:
+      return static_cast<const VLiteralExpr *>(A)->Value ==
+             static_cast<const VLiteralExpr *>(B)->Value;
+    case VExpr::Var:
+      return static_cast<const VVarExpr *>(A)->Name ==
+             static_cast<const VVarExpr *>(B)->Name;
+    case VExpr::Cast:
+      return sameRepresentation(A->Ty, B->Ty) &&
+             sameOffset(static_cast<const VCastExpr *>(A)->Inner.get(),
+                        static_cast<const VCastExpr *>(B)->Inner.get());
+    case VExpr::BinOp: {
+      const auto *L = static_cast<const VBinOpExpr *>(A);
+      const auto *R = static_cast<const VBinOpExpr *>(B);
+      return L->Op == R->Op && sameOffset(L->Lhs.get(), R->Lhs.get()) &&
+             sameOffset(L->Rhs.get(), R->Rhs.get());
+    }
+    default:
+      return false;
+    }
+  }
+
+  /// How a quantifier's loads use its binder j: the distinct element offsets
+  /// c of the slice actuals `base + S*c` it indexes as `(base + S*c) + S*j`,
+  /// whether one is indexed directly (`base + S*j`), and whether one uses j
+  /// otherwise.
+  struct SliceUse {
+    std::vector<const VExpr *> Offsets;
+    bool Direct = false;
+    bool Other = false;
+  };
+
+  static void collectSliceOffsets(const VExpr *E, const std::string &Binder,
+                                  SliceUse &Use) {
+    if (!E || Use.Other)
+      return;
     auto scaled = [](const VExpr *Term, uint64_t &Stride) -> const VExpr * {
       if (Term->K == VExpr::BinOp) {
         const auto *M = static_cast<const VBinOpExpr *>(Term);
@@ -4255,27 +4290,41 @@ class PassivizerImpl {
     };
     if (E->K == VExpr::Load) {
       const VExpr *Address = static_cast<const VLoadExpr *>(E)->Ptr.get();
-      if (Address->K == VExpr::BinOp) {
-        const auto *Outer = static_cast<const VBinOpExpr *>(Address);
-        if (Outer->Op == VBinOp::Add && Outer->Lhs->Ty.Kind == VTypeKind::Ptr &&
-            Outer->Lhs->K == VExpr::BinOp) {
-          const auto *Inner = static_cast<const VBinOpExpr *>(Outer->Lhs.get());
-          uint64_t IndexStride = 0, OffsetStride = 0;
-          const VExpr *Index = scaled(Outer->Rhs.get(), IndexStride);
-          if (Inner->Op == VBinOp::Add &&
-              Inner->Lhs->Ty.Kind == VTypeKind::Ptr && Index->K == VExpr::Var &&
-              static_cast<const VVarExpr *>(Index)->Name == Binder) {
-            const VExpr *Offset = scaled(Inner->Rhs.get(), OffsetStride);
-            if (OffsetStride == IndexStride && Offset->Ty.isInt())
-              return Offset;
-          }
+      if (mentionsFree(Address, Binder)) {
+        const auto *Outer = Address->K == VExpr::BinOp
+                                ? static_cast<const VBinOpExpr *>(Address)
+                                : nullptr;
+        uint64_t IndexStride = 0, OffsetStride = 0;
+        const VExpr *Index = Outer && Outer->Op == VBinOp::Add
+                                 ? scaled(Outer->Rhs.get(), IndexStride)
+                                 : nullptr;
+        if (!Index || Outer->Lhs->Ty.Kind != VTypeKind::Ptr ||
+            Index->K != VExpr::Var ||
+            static_cast<const VVarExpr *>(Index)->Name != Binder ||
+            mentionsFree(Outer->Lhs.get(), Binder)) {
+          Use.Other = true;
+          return;
+        }
+        const auto *Inner =
+            Outer->Lhs->K == VExpr::BinOp
+                ? static_cast<const VBinOpExpr *>(Outer->Lhs.get())
+                : nullptr;
+        const VExpr *Offset = Inner && Inner->Op == VBinOp::Add &&
+                                      Inner->Lhs->Ty.Kind == VTypeKind::Ptr
+                                  ? scaled(Inner->Rhs.get(), OffsetStride)
+                                  : nullptr;
+        if (Offset && OffsetStride == IndexStride && Offset->Ty.isInt()) {
+          if (llvm::none_of(Use.Offsets, [&](const VExpr *Seen) {
+                return sameOffset(Seen, Offset);
+              }))
+            Use.Offsets.push_back(Offset);
+        } else {
+          Use.Direct = true;
         }
       }
     }
-    const VExpr *Found = nullptr;
     auto visit = [&](const VExpr *Child) {
-      if (!Found)
-        Found = sliceOffset(Child, Binder);
+      collectSliceOffsets(Child, Binder, Use);
     };
     switch (E->K) {
     case VExpr::BinOp:
@@ -4302,68 +4351,110 @@ class PassivizerImpl {
     default:
       break;
     }
-    return Found;
+  }
+
+  /// \p Q restated over the indices of a slice's base: j := k - c, a change
+  /// of variables.
+  std::unique_ptr<VExpr> rebased(const VQuantifiedExpr &Q, const VExpr *Offset,
+                                 const std::string &Name) {
+    const SourceLocation Loc = Q.Loc;
+    const VType MathTy = Q.BinderType;
+    auto mathOf = [&](const VExpr *V) -> std::unique_ptr<VExpr> {
+      if (V->Ty.IntMode == VIntMode::Math)
+        return cloneVExpr(V);
+      VType To = V->Ty;
+      To.IntMode = VIntMode::Math;
+      return std::make_unique<VCastExpr>(cloneVExpr(V), V->Ty, To, Loc);
+    };
+    std::map<std::string, std::unique_ptr<VExpr>> Shift;
+    Shift[Q.Binder] = std::make_unique<VBinOpExpr>(
+        VBinOp::Sub, std::make_unique<VVarExpr>(Name, MathTy, Loc),
+        mathOf(Offset), MathTy, Loc);
+    auto Body = substParamsInExpr(Q.Body.get(), Shift);
+    if (!Body)
+      return nullptr;
+    // Over all integers the shift changes no range.
+    std::unique_ptr<VExpr> Lo, Hi;
+    if (Q.Lo) {
+      Lo = std::make_unique<VBinOpExpr>(VBinOp::Add, mathOf(Q.Lo.get()),
+                                        mathOf(Offset), MathTy, Loc);
+      Hi = std::make_unique<VBinOpExpr>(VBinOp::Add, mathOf(Q.Hi.get()),
+                                        mathOf(Offset), MathTy, Loc);
+    }
+    if (Q.K == VExpr::Forall)
+      return std::make_unique<VForallExpr>(Name, std::move(Lo), std::move(Hi),
+                                           std::move(Body), Loc, MathTy);
+    return std::make_unique<VExistsExpr>(Name, std::move(Lo), std::move(Hi),
+                                         std::move(Body), Loc, MathTy);
   }
 
   /// A contract quantifier that indexes a slice actual `base + c` from zero
-  /// is restated over base's indices: j := k - c is a change of variables,
-  /// and it lets the caller's own terms trigger the instantiation.
-  std::unique_ptr<VExpr> rebaseSliceBinders(std::unique_ptr<VExpr> E) {
+  /// is restated over base's indices, j := k - c, so that the caller's own
+  /// terms trigger its instantiation. With loads through slices at several
+  /// offsets, or directly, no one change of variables suits them all: an
+  /// assumption (\p Assumed) then keeps the quantifier and adds its
+  /// restatement over each slice's base, which are equivalent, each with the
+  /// triggers of its own form; a check is left as it is.
+  std::unique_ptr<VExpr> rebaseSliceBinders(std::unique_ptr<VExpr> E,
+                                            bool Assumed) {
     if (!E)
       return E;
     switch (E->K) {
     case VExpr::BinOp: {
       auto *B = static_cast<VBinOpExpr *>(E.get());
-      B->Lhs = rebaseSliceBinders(std::move(B->Lhs));
-      B->Rhs = rebaseSliceBinders(std::move(B->Rhs));
+      B->Lhs = rebaseSliceBinders(std::move(B->Lhs), Assumed);
+      B->Rhs = rebaseSliceBinders(std::move(B->Rhs), Assumed);
       return E;
     }
     case VExpr::UnaryOp: {
       auto *U = static_cast<VUnaryOpExpr *>(E.get());
-      U->Operand = rebaseSliceBinders(std::move(U->Operand));
+      U->Operand = rebaseSliceBinders(std::move(U->Operand), Assumed);
+      return E;
+    }
+    case VExpr::Cast: {
+      auto *C = static_cast<VCastExpr *>(E.get());
+      C->Inner = rebaseSliceBinders(std::move(C->Inner), Assumed);
+      return E;
+    }
+    case VExpr::Conditional: {
+      auto *C = static_cast<VConditionalExpr *>(E.get());
+      C->Cond = rebaseSliceBinders(std::move(C->Cond), Assumed);
+      C->Then = rebaseSliceBinders(std::move(C->Then), Assumed);
+      C->Else = rebaseSliceBinders(std::move(C->Else), Assumed);
       return E;
     }
     case VExpr::Forall:
     case VExpr::Exists: {
       auto *Q = static_cast<VQuantifiedExpr *>(E.get());
-      Q->Body = rebaseSliceBinders(std::move(Q->Body));
+      Q->Body = rebaseSliceBinders(std::move(Q->Body), Assumed);
       if (Q->BinderType.IntMode != VIntMode::Math)
         return E;
-      const VExpr *Offset = sliceOffset(Q->Body.get(), Q->Binder);
-      if (!Offset)
+      SliceUse Use;
+      collectSliceOffsets(Q->Body.get(), Q->Binder, Use);
+      if (Use.Other || Use.Offsets.empty())
         return E;
-      const SourceLocation Loc = Q->Loc;
-      const VType MathTy = Q->BinderType;
-      auto mathOf = [&](const VExpr *V) -> std::unique_ptr<VExpr> {
-        if (V->Ty.IntMode == VIntMode::Math)
-          return cloneVExpr(V);
-        VType To = V->Ty;
-        To.IntMode = VIntMode::Math;
-        return std::make_unique<VCastExpr>(cloneVExpr(V), V->Ty, To, Loc);
-      };
-      const std::string Rebased = Q->Binder + "_rebased";
-      std::map<std::string, std::unique_ptr<VExpr>> Shift;
-      Shift[Q->Binder] = std::make_unique<VBinOpExpr>(
-          VBinOp::Sub, std::make_unique<VVarExpr>(Rebased, MathTy, Loc),
-          mathOf(Offset), MathTy, Loc);
-      auto Body = substParamsInExpr(Q->Body.get(), Shift);
-      // Over all integers the shift changes no range.
-      std::unique_ptr<VExpr> Lo, Hi;
-      if (Q->Lo) {
-        Lo = std::make_unique<VBinOpExpr>(VBinOp::Add, mathOf(Q->Lo.get()),
-                                          mathOf(Offset), MathTy, Loc);
-        Hi = std::make_unique<VBinOpExpr>(VBinOp::Add, mathOf(Q->Hi.get()),
-                                          mathOf(Offset), MathTy, Loc);
+      if (Use.Offsets.size() == 1 && !Use.Direct) {
+        auto Restated =
+            rebased(*Q, Use.Offsets.front(), Q->Binder + "_rebased");
+        return Restated ? std::move(Restated) : std::move(E);
       }
-      if (!Body)
+      if (!Assumed)
         return E;
-      if (E->K == VExpr::Forall)
-        return std::make_unique<VForallExpr>(Rebased, std::move(Lo),
-                                             std::move(Hi), std::move(Body),
-                                             Loc, MathTy);
-      return std::make_unique<VExistsExpr>(Rebased, std::move(Lo),
-                                           std::move(Hi), std::move(Body), Loc,
-                                           MathTy);
+      std::unique_ptr<VExpr> All = std::move(E);
+      const auto &Original = static_cast<const VQuantifiedExpr &>(*All);
+      std::vector<std::unique_ptr<VExpr>> Restatements;
+      for (size_t I = 0; I != Use.Offsets.size(); ++I)
+        if (auto Restated =
+                rebased(Original, Use.Offsets[I],
+                        Original.Binder + "_rebased" +
+                            (I ? std::to_string(I + 1) : std::string())))
+          Restatements.push_back(std::move(Restated));
+      const SourceLocation Loc = All->Loc;
+      for (auto &Restated : Restatements)
+        All = std::make_unique<VBinOpExpr>(VBinOp::And, std::move(All),
+                                           std::move(Restated),
+                                           VType::makeBool(), Loc);
+      return All;
     }
     default:
       return E;
@@ -4513,6 +4604,7 @@ class PassivizerImpl {
     case ProofObligationKind::Initialization:
     case ProofObligationKind::PointerDifference:
     case ProofObligationKind::PointerValidity:
+    case ProofObligationKind::BuiltinArgument:
       return true;
     default:
       return false;
@@ -5346,13 +5438,11 @@ public:
       for (const SafetyCheck &Check : Checks) {
         if (Fn.TotalExpressions && isDefinedness(Check.Kind))
           continue;
-        // Anchor at the clause; an unfolded helper's operators may lie in
-        // another file.
-        auto Cond = cloneExpr(Check.Cond.get(), PCtx);
-        Cond->Loc = Post->Loc;
-        Cond->BeginLoc = Post->BeginLoc;
-        Cond->EndLoc = Post->EndLoc;
-        P.ExitAsserts.push_back({Check.Kind, afterEarlier(std::move(Cond))});
+        // Anchored at the clause, the operation being its focus; an unfolded
+        // helper's operators may lie in another file.
+        P.ExitAsserts.push_back(
+            {Check.Kind, afterEarlier(cloneExpr(Check.Cond.get(), PCtx)), "",
+             {Post->Loc, Post->BeginLoc, Post->EndLoc}});
       }
       auto Clause = cloneVExpr(BoundPost.get());
       EarlierPosts = EarlierPosts ? makeAnd(std::move(EarlierPosts),
@@ -6105,7 +6195,7 @@ public:
              return referencesVar(Pre, Name);
            })))
         BoundPre = abstractValidity(std::move(BoundPre), Renames);
-      BoundPre = rebaseSliceBinders(std::move(BoundPre));
+      BoundPre = rebaseSliceBinders(std::move(BoundPre), /*Assumed=*/false);
       SafetyChecks Checks;
       collectSafety(Pre, &FnMap, &Callee->ValidExtents, &CalleePointerParams,
                     Checks, Fn.ObjectModel);
@@ -6367,7 +6457,8 @@ public:
       PS->K = PassiveStmt::Assume;
       PS->Origin = "call:" + Callee->Name;
       PS->Cond = rebaseSliceBinders(substParams(Post.get(), PostParamMap, Ctx,
-                                                EntryHeap, "", {}, &ParamMap));
+                                                EntryHeap, "", {}, &ParamMap),
+                                    /*Assumed=*/true);
       P.Stmts.push_back(std::move(PS));
     }
     if (Callee->IsTrusted && P.Stmts.size() > FirstPost) {
@@ -6390,9 +6481,10 @@ public:
           auto PS = std::make_unique<PassiveStmt>();
           PS->K = PassiveStmt::Assume;
           PS->Origin = "call:" + Callee->Name;
-          PS->Cond = rebaseSliceBinders(
-              substParams(Check.Cond.get(), PostParamMap, Ctx, EntryHeap, "",
-                          {}, &ParamMap));
+          PS->Cond =
+              rebaseSliceBinders(substParams(Check.Cond.get(), PostParamMap,
+                                             Ctx, EntryHeap, "", {}, &ParamMap),
+                                 /*Assumed=*/true);
           P.Stmts.push_back(std::move(PS));
         }
       }
@@ -7418,7 +7510,7 @@ public:
            A.ProofKind == ProofObligationKind::Initialization))
         Cond = abstractValidity(std::move(Cond), Renames);
       emitPassive(P, PassiveStmt::Assert, std::move(Cond), Active.get(), A.Loc,
-                  A.ProofKind);
+                  A.ProofKind, A.Note);
       break;
     }
     case VStmt::Assume: {

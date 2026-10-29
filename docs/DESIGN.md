@@ -18,6 +18,17 @@ a cpp-verify precondition is written 'cppverify::pre'`) with a fix-it to the
 not make bare words constructs. With the flag, `<cppverify.h>` is included
 implicitly; without it, the constructs are not recognized.
 
+With the flag, in C++, the compiler predefines `__cppverify__` (1) and the
+release in `__cppverify_major__`, `__cppverify_minor__`,
+`__cppverify_patchlevel__`, and `__cppverify_version__` (the string
+`--version` prints; the one `CPPVERIFY_VERSION` in `clang/CMakeLists.txt`
+sets all of them, through `clang/Basic/Version.inc`). Like `__cplusplus`, they
+describe the language, so `-undef` keeps them. A header that GCC, MSVC, or
+upstream Clang also reads wraps each construct in a macro that is empty when
+`__cppverify__` is not defined, as Frama-C's libc defines `__PUSH_FC_STDLIB`
+to a Frama-C pragma under its predefined `__FRAMAC__` and to nothing otherwise
+(`share/libc/features.h`).
+
 ## Contract Syntax Overview
 
 | Syntax | Where | Meaning |
@@ -288,13 +299,42 @@ C++ leaves the order of most operands open (a binary operator's, a
 subscript's array and index, a call's arguments, and before C++17 an
 assignment's two sides), and the verifier checks one order, so a call that
 may write memory (a callee with `cppverify::modifies`, a pointer or
-reference parameter, or a non-const member function) beside an operand
+reference parameter, or a non-const member function; a callee without a
+contract whose body, or a call in it, stores through a pointer, a reference,
+or its object, or to a global) beside an operand
 that reads memory or makes a call is an error: `add_one(p) + *p` is one,
 with a different value in each order. An assignment evaluates its right
 operand first, as C++17 sequences it, so `a[add_one(p)] = *p` stores the
 old `*p`. A call returning a record is made only as a statement or a whole
 initializer, assignment, or return value, and one returning nothing only as
 a statement.
+
+An increment, a decrement, an assignment, or a comma expression may stand
+where its value is used in executable code (`a[i++]`, `*dst++ = *src++`,
+`while (k-- > 0)`, `if ((c = *p) != 0)`, `a = b = 0`): its write runs where
+C++ evaluates it, as a call does, and its value is read there, a postfix
+operator's before the write. Each expression is evaluated once, so
+`a[i++] += 1` increments `i` once. A write in one unsequenced operand that
+another reads (`i++ + i`, which C++ leaves undefined) is an error, as is a
+write to memory beside an operand that reads memory.
+
+### Calls of functions without contracts
+
+A call of a function that has a body and no contract runs that body: the
+verifier inlines it at the call, as Kani and CBMC inline every call and as
+SPARK's GNATprove inlines a subprogram without a contract ("contextual
+analysis"). The caller's proof then covers the body at the arguments the
+caller passes, the body's checks are the caller's, and it reads and writes
+the caller's objects within the caller's frame. Such a function is verified
+where verified code calls it and on its own only when none does, since
+without a precondition its own verification would check inputs no caller
+passes. Recursion, a record returned by value, dynamic storage, a loop
+invariant that uses `cppverify::old` (the inlined body's entry is not the
+caller's), and more than 2000 statements inlined into one function are left
+to a contract: the call is `Unresolved` (`construct.unsupported`) with a
+message that names the helper and asks for one. A `constexpr` function
+without a contract is still lifted as a spec, a constructor without one is
+not inlined, and a function without a body (a library's) is still an error.
 
 ## Loop Contracts: invariant / decreases
 
@@ -522,6 +562,19 @@ value evaluates the value, and a value computed for nothing (`x + 1;`) is
 computed with its checks. `[[assume(e)]]` and `__builtin_assume(e)` make `e`
 false undefined, so `e` is asserted (kind `assertion`), then assumed.
 
+### Bit builtins
+
+`__builtin_clz`, `__builtin_ctz`, `__builtin_popcount`, `__builtin_parity`,
+`__builtin_ffs` (with their `l` and `ll` forms), and `__builtin_bswap16/32/64`
+are their exact definitions over the operand's bits, as CBMC models them
+rather than trusting a contract: comparisons with constants, conditionals,
+and sums without carries, none of which needs a check of its own. GCC leaves
+`__builtin_clz(0)` and `__builtin_ctz(0)` undefined, which is an obligation of
+the definedness kind `builtin-argument` where the call is evaluated, as
+Frama-C's libc specifies them with `requires x != 0`; in a spec, which is
+total, they count every bit of 0, as C++20's `std::countl_zero` does. Other
+builtins stay unsupported.
+
 An uncontracted `constexpr` helper is lifted as a spec whose definedness is
 checked at each call by unfolding its body. Its `assert(c)` becomes, during
 that unfolding, a `Require(!path || c)` expression in the evaluation, true
@@ -740,14 +793,17 @@ cppverify::spec bool reach(int a, int b)
 
 ### Automatic induction and counterexamples too large to compute
 
-When no finite unfolding settles a claim about a recursive spec, the verifier
-tries well-founded inductions over it, as Dafny's automatic induction and
+When no finite unfolding settles a claim about a recursive spec, or the
+solver cannot settle a lemma (a proof function) within its timeout, the
+verifier tries well-founded inductions over it, as Dafny's automatic induction and
 Lean's and Isabelle's functional induction do: the claim at every value
 smaller in a measure, everything else fixed. The measure is a recursive
 spec's own `cppverify::decreases` at the application the claim makes, and the
 hypothesis is also given at the values the spec's recursion reaches, through
 the other members of its recursion group and under quantifiers; strong
-induction on an integer variable is tried too. Smaller means smaller by the
+induction on an integer variable that the claim passes to a spec or uses as
+an index into memory is tried too (an order on adjacent elements of an array
+is an order on all of them by induction on the second index). Smaller means smaller by the
 decrease relation of termination checks, which has no infinite descending
 chain, so no induction proves a false claim; the hypothesis is the
 function's own claim, without the facts the verifier added. A verified
@@ -930,6 +986,19 @@ standard defines them ([alg.min.max]): `max(a, b)` is `a < b ? b : a` and
 `min(a, b)` is `b < a ? b : a`, read once each, in contracts and in code.
 Any other function of the standard library that is not a constant is an
 error naming it.
+
+Of the C library, `abs`, `labs`, `llabs`, and `std::abs` of an integer are
+their definition, undefined at the minimum, and in a spec the mathematical
+absolute value; libc++ defines the `std::abs` of `long` and `long long` in
+the global namespace of its `<stdlib.h>`, so a global `abs` declared in a
+system header is it too, and one of the user's own is not. `memcpy`, `memmove`, `memset`,
+and `memcmp` of objects of an integer type `T` (an enumeration as its
+underlying type, `bool` only with `bool`), with a size of `k * sizeof(T)`
+bytes, are calls of their models in `<cppverify.h>`: trusted declarations
+with contracts, one per type, over `k` objects (Frama-C's libc states the
+same over bytes, which this memory model, one value per object, does not
+have). A proof that uses one names it in `[trusts=...]`. A size that splits
+an object is `construct.unsupported`.
 
 **Compile-time partial evaluation:** When a contract contains a `constexpr` call whose arguments are all constants, Clang evaluates it at compile time before the verifier sees it. A callee precondition instantiated at a call site is not such a call: there the argument is substituted for the parameter, and the solver settles the application from the lifted definition:
 

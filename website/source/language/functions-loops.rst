@@ -42,6 +42,54 @@ type trait such as ``__is_same(T, U)``, ``offsetof``, and
 aliases, using-declarations, and local classes and enumerations declare
 names and do nothing at run time.
 
+GCC's bit builtins are their exact definitions over the operand's bits:
+``__builtin_clz``, ``__builtin_ctz``, ``__builtin_popcount``,
+``__builtin_parity``, and ``__builtin_ffs``, each with its ``l`` and ``ll``
+forms, and ``__builtin_bswap16``, ``__builtin_bswap32``, and
+``__builtin_bswap64``. GCC leaves the count of the leading or trailing zeros
+of 0 undefined, so ``__builtin_clz`` and ``__builtin_ctz`` check, where they
+are called, that their argument is not 0, a check of kind
+``builtin-argument``. In a spec, which is total, they count every bit of 0
+as zero, as C++20's ``std::countl_zero`` and ``std::countr_zero`` do.
+
+.. code-block:: cpp
+
+   namespace cv = cppverify;
+
+   int log2_floor(unsigned x)
+     cv::pre(x != 0)
+     cv::post(0 <= cv::result && cv::result < 32)
+     cv::post(x >= 1u << cv::result)
+   {
+     return 31 - __builtin_clz(x);
+   }
+
+   int top_bit(unsigned x)
+     cv::post(cv::result >= 0)
+   {
+     return 31 - __builtin_clz(x);
+   }
+
+   bool one_bit(unsigned x)
+     cv::post(cv::result == (x != 0 && (x & (x - 1)) == 0))
+   {
+     return __builtin_popcount(x) == 1;
+   }
+
+.. code-block:: text
+
+   Verified: log2_floor [backend=z3]
+   bits.cpp:14:15: error: verification failed: top_bit [builtin-argument] [backend=z3] [reason=counterexample]
+      14 |   return 31 - __builtin_clz(x);
+         |               ^~~~~~~~~~~~~~~~
+   bits.cpp:14:15: note: counterexample: x = 0
+   Verified: one_bit [backend=z3]
+   Summary: 2 verified, 1 failed in 0.2 s
+
+Before 0.2 a call of one of them stopped its function (``call to function
+without a verification contract: __builtin_clz``), and a ``static_assert``
+with a message stopped the run.
+
 A caller's proof uses its callees' contracts, so a verdict is only as good as
 those contracts. A caller whose proof relies on a callee contract that the
 callee's own verification did not establish is ``Unresolved`` with reason
@@ -501,8 +549,10 @@ C++ leaves the order of most operands open: the two operands of ``+`` or
 ``<``, a subscript's array and index, the arguments of a call. The verifier
 runs calls first, in one order, so that order must not matter. A call that
 may write memory (its callee has a ``cppverify::modifies``, a pointer or
-reference parameter, or is a member function that is not ``const``) next to
-an operand that reads memory, or makes another call, is an error:
+reference parameter, or is a member function that is not ``const``; or it
+has no contract and its body, or a call in it, writes through a pointer, a
+reference, or its object, or to a global) next to an operand that reads
+memory, or makes another call, is an error:
 
 .. cppverify-example: label add_one
 
@@ -531,7 +581,7 @@ an operand that reads memory, or makes another call, is an error:
 
 .. code-block:: text
 
-   order.cpp:18:10: error: sum_with: C++ leaves the order of these operands open, and a call in one may write what the other reads; make the call in a statement of its own first
+   order.cpp:18:10: error: sum_with: C++ leaves the order of these operands open, and a call or a write in one may change what the other reads; make it a statement of its own first
       18 |   return add_one(p) + *p;
          |          ^~~~~~~~~~~~~~~
 
@@ -562,8 +612,8 @@ the target is located:
 
 Before C++17 an assignment's operands are unsequenced too: with
 ``--extra-arg=-std=c++14``, ``store_old`` is ``error: store_old: before
-C++17 the order of an assignment's operands is open, and a call in one may
-write what the other reads; make the call in a statement of its own
+C++17 the order of an assignment's operands is open, and a call or a write
+in one may change what the other reads; make it a statement of its own
 first``.
 
 A call that returns nothing is made as a statement of its own
@@ -573,6 +623,165 @@ initializer, assignment, or return value (``Pt p = make(x);``,
 (``make(x).y``) is still ``executable call is unsupported in this expression
 context``. Before 0.2, every call inside a larger expression was that error,
 and the file stopped.
+
+Writes in expressions
+---------------------
+
+An increment, a decrement, an assignment, or a comma expression may stand
+where its value is used, as C code often writes it: ``a[i++]``,
+``*dst++ = *src++``, ``while (k-- > 0)``, ``if ((c = *p) != 0)``,
+``a = b = 0``. Its write runs where C++ evaluates it, as a call does: before
+what reads its value, and under ``&&``, ``||``, or ``?:`` only on its own
+path. Its value is read there: a postfix operator's is the value before the
+write, any other's the value after it.
+
+.. code-block:: cpp
+
+   void copy(int *dst, const int *src, int n)
+     cv::pre(cv::valid(dst, n) && cv::valid(src, n) && 0 <= n && n < 1000)
+     cv::modifies(dst[0 : n])
+     cv::post(cv::forall(k, 0, n, dst[k] == src[k]))
+   {
+     int *d = dst;
+     const int *s = src;
+     for (int i = 0; i < n; i = i + 1)
+       cv::invariant(0 <= i && i <= n && d == dst + i && s == src + i)
+       cv::invariant(cv::forall(k, 0, i, dst[k] == src[k]))
+       cv::decreases(n - i)
+     {
+       *d++ = *s++;
+     }
+   }
+
+   int countdown(int k)
+     cv::pre(0 <= k && k < 100)
+     cv::post(cv::result == 0)
+   {
+     while (k-- > 0)
+       cv::invariant(0 <= k && k < 100)
+       cv::decreases(k)
+     {
+     }
+     return k + 1;
+   }
+
+.. code-block:: text
+
+   Verified: copy [backend=z3]
+   Verified: countdown [backend=z3]
+
+The condition ``k-- > 0`` decrements ``k`` at every test, the last one
+included, so ``k`` is ``-1`` after the loop.
+
+Each expression is evaluated once, however often the verifier reads it: in
+``a[i++] += 1`` the target is read and written, and ``i`` grows by one. An
+assignment evaluates its right operand before its target (C++17), so
+``a[k++] = k`` stores the old ``k`` at the old ``k``; before C++17 the two are
+unsequenced, and a write in one that the other reads is the error above.
+
+The operands of most operators and the arguments of a call are unsequenced,
+and C++ leaves a write to an object that another of them reads undefined. As
+with a call that may write what another operand reads, that is an error at
+the expression:
+
+.. cppverify-example: rejects
+
+.. code-block:: cpp
+
+   int twice(int i)
+     cv::pre(0 <= i && i < 100)
+   {
+     return i++ + i;
+   }
+
+.. code-block:: text
+
+   twice.cpp:4:10: error: twice: C++ leaves the order of these operands open, and a call or a write in one may change what the other reads; make it a statement of its own first
+
+Writes are values in executable code only: ghost code and proof functions
+assign their locals in statements of their own, and a pointer to dynamic
+storage (``new``) is assigned in a statement of its own. Before 0.2, each of
+these forms was ``unsupported unary operator`` or ``unsupported binary
+operator``, and its function was not verified.
+
+Calls of functions without contracts
+------------------------------------
+
+A call of a function that has a body and no contract runs that body where
+the call is: the verifier inlines it, as Kani and CBMC inline every call and
+as SPARK's GNATprove inlines a subprogram without a contract. The caller's
+proof covers the body at the arguments the caller passes, its checks are the
+caller's, and it reads and writes the caller's objects, within the caller's
+``cppverify::modifies`` frame. A helper may hold loops with their invariants,
+returns anywhere, calls of other helpers and of contracted functions, whose
+preconditions are checked at each call; a member function is a helper too.
+Two helpers that write nothing their caller sees may stand side by side in
+one expression (``abs_diff(a, b) + abs_diff(c, d)``), and a helper's
+``cppverify::reveal_with_fuel`` unfolds its specs where it is inlined.
+
+.. code-block:: cpp
+
+   int count_zeros(const int *a, int n)
+   {
+     int c = 0;
+     for (int i = 0; i < n; i = i + 1)
+       cv::invariant(0 <= i && i <= n && 0 <= c && c <= i)
+       cv::decreases(n - i)
+     {
+       if (a[i] == 0)
+         c = c + 1;
+     }
+     return c;
+   }
+
+   int zeros(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 1000)
+     cv::post(0 <= cv::result && cv::result <= n)
+   {
+     return count_zeros(a, n);
+   }
+
+   int zeros_past(const int *a, int n)
+     cv::pre(valid(a, n) && 0 <= n && n <= 1000)
+   {
+     return count_zeros(a, n + 1);
+   }
+
+.. code-block:: text
+
+   Verified: zeros [backend=z3]
+   zeros.cpp:8:9: error: verification failed: zeros_past [bounds] [backend=z3] [reason=counterexample]
+       8 |     if (a[i] == 0)
+         |         ^
+   zeros.cpp:8:9: note: counterexample: count_zeros::a = 1, count_zeros::n = 2, count_zeros::c = 0, count_zeros::i = 0 -> 1, a = 1, n = 1
+
+A failure in a helper is shown at its operation, in the verdict of the
+function that calls it, and the counterexample names the helper's variables
+with its name (``count_zeros::i``). A function without a contract is verified
+where verified code calls it, at each such call, and on its own only when
+none does: ``count_zeros`` above has no verdict of its own, which without a
+precondition its reads could not have.
+
+What a contract has to state instead fails closed, ``Unresolved`` with
+reason ``construct.unsupported`` and a message that names the helper and asks
+for a contract:
+
+- recursion, directly or through other helpers;
+- a record returned by value (a record parameter is its fields, and a
+  pointer or reference to one addresses the caller's object);
+- allocation and deallocation, and a pointer to dynamic storage as the
+  result;
+- a loop invariant that uses ``cppverify::old``, whose entry would be the
+  caller's;
+- more than 2000 statements of helpers' bodies inlined into one function;
+- a body the verifier does not support, whose message the call repeats.
+
+A ``constexpr`` function without a contract is lifted as a spec instead
+(Functions, above), a constructor without a contract is not inlined, and a
+call of a function without a body in the translation unit, or of the
+standard library beyond ``std::min`` and ``std::max``, is an error naming it
+(``call to function without a verification contract``). Before 0.2 every
+call of a function without a contract was that error.
 
 Templates
 ---------

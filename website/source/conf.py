@@ -14,7 +14,7 @@ copyright = f"{datetime.now().year}, {author}"
 # The one version of cpp-verify, which --version also reports.
 release = re.search(
     r"set\(CPPVERIFY_VERSION (\S+)\)",
-    (ROOT.parents[1] / "clang/lib/Verify/CMakeLists.txt").read_text(),
+    (ROOT.parents[1] / "clang/CMakeLists.txt").read_text(),
 ).group(1)
 version = ".".join(release.split(".")[:2])
 

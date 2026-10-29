@@ -375,6 +375,31 @@ types, and the parameters in `ValueReferences` are read as values; a
 function that cannot be lifted returns a placeholder that the lifting loop
 marks unsupported, so `SpecDependencies` name it.
 
+**The C library's memory functions and abs:** a contract on `void *` cannot
+speak of the objects behind it, and the heap keeps one cell per object, so
+`convertLibraryCall` recognizes `memcpy`, `memmove`, `memset`, and `memcmp`
+by builtin ID, reads the objects each pointer addresses as written, before
+its conversion to `void *` (`beforeVoidPointer`; an enumeration as its
+underlying integer), and lowers the call to a `VCallStmt` of that type's
+model, a trusted declaration with a contract in `<cppverify.h>`
+(`cppverify::model`, found by `libraryModel`), with `k = n / sizeof(T)` and
+an `unsupported` assert, with its note (`VAssertStmt::Note`), that `n` is a
+multiple of `sizeof(T)`. The pointers' objects must have one size, and be
+`bool` on both sides or neither. `memset`'s byte becomes the object it
+repeats, `(unsigned char)c * 0x0101...` reinterpreted as `T`. The main
+conversion loop skips the models (`isLibraryModel`); the ones calls use
+(`UsedLibraryModels`) are converted after it and marked `IsBuiltin`, so
+they are neither verified nor reported, but stay trusted: established for
+the fixpoint, and named in every caller's `[trusts=...]`. The modular call
+then does the rest as for any callee: extents contained in the caller's
+objects, the separation of `memcpy`'s ranges (`memmove`'s model has
+`aliases`), the frame `d[0 : k]`, and the postconditions. `convertAbs`
+lowers `abs`, `labs`, `llabs`, and `std::abs` of an integer (in `std`, or a
+global `abs` of a system header, as libc++'s `<stdlib.h>` defines it) to
+`x < 0 ? -x : x` in the parameter's type in the function's integer mode:
+machine in executable and proof code, contracts included, where `-x` is
+checked for overflow, and mathematical in a spec.
+
 **Records in memory by value:** `recordFieldsInMemory` reads a record value
 kept in memory, a promoted local or one in a pointee or record reference
 (`promotedRootLocal`, `inPointeeObject`), through implicit copies and
@@ -452,6 +477,20 @@ of a constant table (a constant array's initializer or a string literal) to
 a synthesized spec (`IsBuiltin`, identity `__cppverify_table.<name>@L:C` or
 `__cppverify_string@L:C`) whose body is a balanced comparison tree over the
 linear index.
+
+**Bit builtins:** `ASTConverter::convertBitBuiltin` lowers a call of
+`__builtin_clz`, `ctz`, `popcount`, `parity`, `ffs` (and their `l`/`ll`
+forms) or `bswap16/32/64` to its definition over the operand, read as an
+unsigned machine value of the parameter's width (a mathematical argument
+converts to the parameter's type first, as a bitwise operand does): `clz`
+and `ctz` are a ladder of conditionals on `x & 2^k != 0` with literal
+results, `popcount` and `parity` a balanced sum of one-bit terms in a byte
+(at most 64, so its adders stay small), and `bswap` the bits moved to their
+places, combined with `|` since no two meet. None of these operations has a
+check of its own. `clz` and `ctz` are wrapped in
+`ite(Require(x != 0, builtin-argument), v, v)`, except in an explicit spec,
+which is total and counts every bit of 0. Summing the bits at the operand's
+width made `parity` of a `popcount` take 6 s; in a byte it takes 0.8 s.
 
 **Require:** produced by the spec inliner from the `assert`
 statements of a lifted `constexpr` helper's body (`evalBodySeq`): on the
@@ -1930,7 +1969,9 @@ recursing to the nesting limit. If the complete query is unresolved, Z3 may solv
 ordered queries. It does not reconstruct alternate passive programs.
 
 **Induction.** A module left `Unresolved` with `spec.fuel` (or marked
-`InductionOnly`) is retried by well-founded inductions in
+`InductionOnly`), or a lemma's (a module with a `Contract`, which only a
+proof function has) left with `solver.timeout` or `solver.unknown`, is
+retried by well-founded inductions in
 `VerifyBackend::verify`, the entry every caller and backend shares; composite
 backends call `verifyDirect` on their solvers, so the step runs once, over
 the composite (`Backend/Induction.cpp`). The claim of a module is its
@@ -1944,7 +1985,8 @@ those assumptions, simplified like the goals (`ObligationModule::Theorems`,
 assumption a premise, as before). A scheme (`InductionScheme`) is a measure
 over some variables: the `cppverify::decreases` of a recursive spec applied in the claim
 at that application (`LogicFunctionDecl::Decreases`, lowered by `SpecAxioms`),
-or one integer variable (strong induction). Its induction module is the
+or one integer variable that the claim passes to a spec or uses in a read's
+address (strong induction, `integerArgumentVariables`). Its induction module is the
 module with a hypothesis assumed by every obligation other than unwinding
 ones: the claim, with the definitions it assumes substituted
 (`(x == t && A) -> B` becomes `(A -> B)[x := t]`, which only adds models),
@@ -2500,7 +2542,10 @@ obligation's counterexample query to true.
 
 Public obligation identities are source anchored:
 `function-identity::kind@line:column`, with `#N` only for obligations sharing
-one anchor. This keeps later IDs stable when an unrelated obligation is inserted
+one anchor. A location in a macro is where Clang's diagnostics show it
+(`SourceManager::getFileLoc`): in an argument where it is written, elsewhere
+where the macro is used; a range written in one place (one argument) is
+that place's (`Lexer::makeFileCharRange`), and any other the macro's use. This keeps later IDs stable when an unrelated obligation is inserted
 or reordered without moving the source anchor; JSON records carry it, and text
 names only the kind (`[overflow]`), since the location prefixes the line.
 
@@ -2512,7 +2557,9 @@ around it (`PassiveStmt::Focus`, the condition's `Loc`, `BeginLoc`, and
 precondition at a call the call (`VCallStmt::CallSite`, the call
 expression, set by the converter's `atCall`) with the callee's clause
 (`PassiveStmt::Clause`); a call's own checks, whose conditions are anchored
-at the call statement, take the call expression as their focus. Layer 3
+at the call statement, take the call expression as their focus. A check that
+a postcondition is defined is anchored at the clause
+(`PassiveExitAssert::Anchor`), and its operation is its focus. Layer 3
 keeps both on the obligation (`Obligation::Focus`, `Clause`), as
 diagnostics only: archives keep their sources from schema v6, and hashes
 neither. When the driver annotates a module's sources it drops a focus that
@@ -3020,18 +3067,91 @@ terminal module, with its actual bound. Archive replay consumes that one bound
 and does not claim to repeat incremental source exploration. Loop trace events
 carry one-based iteration numbers at the original source location.
 
+## Inlined Helpers
+
+A call of a function with a body and no contract (`ASTConverter::
+isInlineHelper`: not a spec, proof, or `constexpr` function, a builtin, the
+standard library's, a system header's, a constructor, or a member the
+verifier does not support) is lowered as a contracted call is, by
+`hoistExecCall` and the call statements, so its arguments are evaluated in
+C++'s order; `atCall` marks the `VCallStmt` `InlinesHelper` and records the
+helper. After the main loop the converter converts each recorded helper once
+(`convertFunction(FD, /*AsInlineHelper=*/true)`), marked `IsInlineHelper`,
+before the library models and the lifted `constexpr` functions, whose calls a
+helper may add. A helper whose body does not convert is not reported on its
+own: its first error, with its location, is kept for its calls
+(`UnconvertedHelpers`).
+
+`inlineHelperCalls` (`Transform/InlineHelpers.cpp`) then runs in the
+converter, before the call-graph analyses (recursion groups, clusters, spec
+dependencies), so they and every pass after see the inlined bodies. For each
+marked call it clones the helper's body as converted (a helper verified on
+its own is inlined as written, not as its own calls were inlined) and renames
+every variable, binder, and target apart (`__inlineN_helper$x`). Each
+parameter becomes a local assigned its argument (a reference binding for a
+scalar reference parameter). A flag `__inlineN_helper$__returned` starts
+false, and the body's own result `__inlineN_helper$__result` starts as a zero
+of the return type, so that a value assigned on a loop's exit path has a
+version of its type at the loop's head and reaches its exit (an untyped havoc
+gave the merge at an outer loop's head no type); the call's target receives
+it after the body. Each `return e` becomes `result = e; returned = true`: outside loops the
+statements after one that may return are guarded by `!returned`, inside a
+loop it also breaks, a loop that may return is followed by `if (returned)
+break;` in an enclosing loop, and every such loop gets the invariant
+`!returned`, which holds since a path that sets it leaves the loop at once. A
+`do` loop needs nothing more, since its first iteration is lowered before its
+loop. The calls in the inlined body are inlined in turn, with the helpers
+being inlined on a stack, which detects recursion. Each caller receives the
+helper's source variables, displayed as `helper::x`, its bounded pointers,
+spec dependencies, divergence and unmeasured loops, its extent
+(`VFunction::InlinedExtents`), within which a check's focus may be shown,
+and its spec fuel and reveals (`SpecFuel`, the larger of the two, and
+`RevealedSpecs`): more unfolding only adds equations of definitions. Its
+`hide`s are not, since they would withhold a definition from the caller's
+other claims. For the order of unsequenced operands (B11), a call of a
+helper may write memory exactly when its body, or a call in it, stores
+through a pointer, a reference, or its object, or to a global, allocates,
+or makes a call the verifier cannot see into (`callMayWrite`, which applies
+the contract rule to contracted callees).
+
+A call that cannot be inlined becomes `assert false` of kind `unsupported`,
+with a note that names the helper and asks for a contract, then `assume
+false`, since nothing is known of what the call does: recursion, a record
+result (`ReturnFields`), dynamic storage, `cppverify::old` or
+`cppverify::result` in the body (its entry is not the caller's), and a body
+that did not convert. Past `MaxInlinedStatements` (2000) statements inlined
+into one function, the function's whole body becomes that obligation, at the
+call of the outermost helper, since a partly inlined body only grows the
+queries. Finally the functions converted only to be inlined are removed, and
+so is every function without a contract that some call inlines: it is
+verified where verified code calls it.
+
 ## Modular Exec Calls
 
 `ASTConverter` lowers contracted **exec** calls to `VCallStmt` nodes, in every
-expression position. While a statement or a condition of executable code is
+expression position, and calls of functions without contracts the same way
+(`lowersToCall`), marked `InlinesHelper` (see "Inlined helpers" below). While a statement or a condition of executable code is
 converted, its calls go to a call sink (`CallSink`, beside `SubobjectSink`):
 each becomes a `VCallStmt` into a fresh temporary `__call_N` before the
 statement (a condition's before the `VIfStmt`), its arguments lowered as a
 call statement's are (`convertExecCallArgs`, nested calls into `__nested_N`),
 and the expression reads the temporary; a `CallExpr` converted twice within a
 statement, as an index the binding check reads again, calls once
-(`HoistedCalls`). So `Passivize::emitCallStmt` applies callee
+(`HoistedValues`). So `Passivize::emitCallStmt` applies callee
 `cppverify::pre`/`cppverify::post` at each site.
+
+- **Writes.** An increment, a decrement, or an assignment whose value an
+  expression uses goes to the call sink the same way (`hoistSideEffect`): its
+  statement, converted as a statement of its own is, runs before the rest of
+  the expression, and its value is read into a temporary `__value_N` there,
+  a postfix operator's before the write and any other's after it. A comma's
+  first operand is converted as a discarded statement into the sink, and the
+  comma is its second operand. `HoistedValues` maps each hoisted call or
+  write to its temporary, so an expression the converter reads twice, as a
+  compound assignment's target is read and then located, is evaluated once.
+  The statement of a write continues its expression's evaluation and keeps
+  that map (`ContinuesEvaluation`), since its target is converted again in
+  it: `a[k++]++` increments `k` once.
 
 - **Paths.** An operand that `&&`, `||`, or `?:` evaluates only on its own
   path is converted with both sinks pointed at a list of its own
@@ -3057,14 +3177,20 @@ statement, as an index the binding check reads again, calls once
   member function) beside an evaluation a call may change in the other
   (`isHeapSensitive`: a load, a reference, an addressable local, another
   call; for an assignment's target only what locating it reads,
-  `locatingIsHeapSensitive`) is a conversion error at the expression. An
-  assignment whose target makes a call saves its right operand in
-  `__value_N` before converting the target, so the value is read, and
-  checked, before the target's calls run, as C++17 sequences them. Frama-C
+  `locatingIsHeapSensitive`) is a conversion error at the expression. So is
+  a write in one operand that the other may read (`writesWhatReads`): a
+  variable it writes that the other names, with the fields of a record held
+  by value counted as the record's, or memory (a field through a pointer or
+  `this`, an element, a reference) beside an evaluation a call may change.
+  C++ leaves such a write and read
+  undefined. An assignment whose target makes a call or a write saves its
+  right operand in `__value_N` before converting the target, so the value
+  is read, and checked, before the target's calls and writes run, as C++17
+  sequences them. Frama-C
   keeps such orders as CIL `UnspecifiedSequence` statements with the reads
   and writes of each part and checks them access by access under
-  `-unspecified-access`; the rule here is per call, coarser but needing no
-  read sets.
+  `-unspecified-access`; the rule here is per call and per written variable,
+  coarser but needing no read sets.
 - A call whose result is a record is lowered only as a statement, a whole
   initializer, assignment, or return value; one that returns nothing only
   as a statement.

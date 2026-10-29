@@ -1345,6 +1345,48 @@ and allocation in the callee fail closed. Within the caller, address and
 identity remain a pair through local copies, assignments, branches,
 ``nullptr``, and supported call results.
 
+Calls of helpers without contracts
+----------------------------------
+
+A contract is the interface a caller relies on, but a small helper used in
+one place hardly needs one. A call of a function that has a body and no
+contract runs that body: the verifier inlines it, so the caller's proof covers
+the helper at the arguments the caller passes, and the helper's checks are
+the caller's.
+
+.. code-block:: cpp
+
+   int add_one(int x) { return x + 1; }
+
+   int twice_plus_one(int x)
+     cv::pre(0 <= x && x < 1000)
+     cv::post(cv::result == 2 * x + 1)
+   {
+     return add_one(x) + x;
+   }
+
+   int next(int x)
+     cv::post(cv::result == x + 1)
+   {
+     return add_one(x);
+   }
+
+.. code-block:: text
+
+   Verified: twice_plus_one [backend=z3]
+   helpers.cpp:1:31: error: verification failed: next [overflow] [backend=z3] [reason=counterexample]
+       1 | int add_one(int x) { return x + 1; }
+         |                             ~~^~~
+   helpers.cpp:1:31: note: counterexample: add_one::x = 2147483647, x = 2147483647
+
+The same helper verifies under one caller and fails under another: what
+holds depends on what the caller passes. A helper is never verified on its
+own when verified code calls it, so ``add_one`` has no verdict. Give a
+function a contract when its callers should not depend on its body, when it
+calls itself, or when it is large: the verifier asks for one in those cases
+(:doc:`../../language/functions-loops`, "Calls of functions without
+contracts").
+
 Where verification stops: trusted contracts
 -------------------------------------------
 

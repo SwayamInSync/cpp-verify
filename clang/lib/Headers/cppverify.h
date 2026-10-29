@@ -218,6 +218,93 @@ struct map {
 };
 map map_empty();
 
+/* The meaning the verifier gives to the C library's memcpy, memmove, memset,
+ * and memcmp. A call with pointers to an integer type T, written before their
+ * conversion to void *, and a size of k * sizeof(T) bytes is a call of the
+ * model for T with k: whole objects, which keep their values bit for bit.
+ * The models are trusted: a proof that uses one names it in [trusts=...].
+ * Distinct pointer parameters of which one is mutable address separate
+ * objects (memcpy's ranges must not overlap); memmove's may overlap. */
+namespace model {
+
+#define __CPPVERIFY_MEMORY_MODELS(T)                                           \
+  [[cppverify::trusted]] T *memcpy(T *d, const T *s, __SIZE_TYPE__ k)          \
+      cppverify::pre(cppverify::valid(d, k) && cppverify::valid(s, k))         \
+      cppverify::modifies(d[0 : k])                                            \
+      cppverify::post(cppverify::forall(i, 0, k, d[i] == cppverify::old(s[i])))\
+      cppverify::post(cppverify::result == d);                                 \
+  [[cppverify::trusted]] T *memmove(T *d, const T *s, __SIZE_TYPE__ k)         \
+      cppverify::aliases(d, s)                                                 \
+      cppverify::pre(cppverify::valid(d, k) && cppverify::valid(s, k))         \
+      cppverify::modifies(d[0 : k])                                            \
+      cppverify::post(cppverify::forall(i, 0, k, d[i] == cppverify::old(s[i])))\
+      cppverify::post(cppverify::result == d);
+
+/* memset(d, c, n) stores the byte (unsigned char)c in every byte: v is that
+ * byte repeated in an object of type T. */
+#define __CPPVERIFY_MEMSET_MODEL(T)                                            \
+  [[cppverify::trusted]] T *memset(T *d, T v, __SIZE_TYPE__ k)                 \
+      cppverify::pre(cppverify::valid(d, k))                                   \
+      cppverify::modifies(d[0 : k])                                            \
+      cppverify::post(cppverify::forall(i, 0, k, d[i] == v))                   \
+      cppverify::post(cppverify::result == d);
+
+/* memcmp is 0 exactly when the objects are equal. Of bytes, its sign is that
+ * of the first difference, as unsigned char; of wider objects that depends
+ * on the byte order, and only equality is modeled. */
+#define __CPPVERIFY_MEMCMP_MODEL(T)                                            \
+  [[cppverify::trusted]] int memcmp(const T *a, const T *b, __SIZE_TYPE__ k)   \
+      cppverify::pre(cppverify::valid(a, k) && cppverify::valid(b, k))         \
+      cppverify::post((cppverify::result == 0) ==                              \
+                      cppverify::forall(i, 0, k, a[i] == b[i]));
+#define __CPPVERIFY_BYTE_MEMCMP_MODEL(T)                                       \
+  [[cppverify::trusted]] int memcmp(const T *a, const T *b, __SIZE_TYPE__ k)   \
+      cppverify::pre(cppverify::valid(a, k) && cppverify::valid(b, k))         \
+      cppverify::post((cppverify::result == 0) ==                              \
+                      cppverify::forall(i, 0, k, a[i] == b[i]))                \
+      cppverify::post(cppverify::forall(                                       \
+          j, 0, k,                                                             \
+          !cppverify::forall(i, 0, j, a[i] == b[i]) || a[j] == b[j] ||         \
+              (cppverify::result < 0) ==                                       \
+                  ((a[j] & 255) < (b[j] & 255))));
+
+#define __CPPVERIFY_WIDE_MODELS(T)                                             \
+  __CPPVERIFY_MEMORY_MODELS(T)                                                 \
+  __CPPVERIFY_MEMSET_MODEL(T)                                                  \
+  __CPPVERIFY_MEMCMP_MODEL(T)
+#define __CPPVERIFY_BYTE_MODELS(T)                                             \
+  __CPPVERIFY_MEMORY_MODELS(T)                                                 \
+  __CPPVERIFY_MEMSET_MODEL(T)                                                  \
+  __CPPVERIFY_BYTE_MEMCMP_MODEL(T)
+
+__CPPVERIFY_MEMORY_MODELS(bool)
+__CPPVERIFY_MEMCMP_MODEL(bool)
+__CPPVERIFY_BYTE_MODELS(char)
+__CPPVERIFY_BYTE_MODELS(signed char)
+__CPPVERIFY_BYTE_MODELS(unsigned char)
+__CPPVERIFY_WIDE_MODELS(wchar_t)
+#if __cplusplus >= 201103L
+__CPPVERIFY_WIDE_MODELS(char16_t)
+__CPPVERIFY_WIDE_MODELS(char32_t)
+#endif
+__CPPVERIFY_WIDE_MODELS(short)
+__CPPVERIFY_WIDE_MODELS(unsigned short)
+__CPPVERIFY_WIDE_MODELS(int)
+__CPPVERIFY_WIDE_MODELS(unsigned)
+__CPPVERIFY_WIDE_MODELS(long)
+__CPPVERIFY_WIDE_MODELS(unsigned long)
+__CPPVERIFY_WIDE_MODELS(long long)
+__CPPVERIFY_WIDE_MODELS(unsigned long long)
+
+#undef __CPPVERIFY_MEMORY_MODELS
+#undef __CPPVERIFY_MEMSET_MODEL
+#undef __CPPVERIFY_MEMCMP_MODEL
+#undef __CPPVERIFY_BYTE_MEMCMP_MODEL
+#undef __CPPVERIFY_WIDE_MODELS
+#undef __CPPVERIFY_BYTE_MODELS
+
+} // namespace model
+
 } // namespace cppverify
 
 #endif /* __cplusplus */

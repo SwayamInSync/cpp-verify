@@ -1212,7 +1212,8 @@ kind says what the check is:
 - C++ definedness: ``overflow`` (including a mathematical value converted to
   a machine type it does not fit), ``division-by-zero``, ``shift``,
   ``bounds``, ``dereference``, ``initialization``, ``pointer-difference``,
-  and ``deallocation``;
+  ``deallocation``, and ``builtin-argument`` (an argument a builtin is
+  undefined for, such as ``__builtin_clz(0)``);
 - generated interfaces: ``pointer-validity`` (a pointer parameter, result, or
   ``valid(p, n)`` extent must denote valid storage), ``aliasing`` (implicit
   non-aliasing), ``frame`` (writes and callee effects stay within
@@ -1591,8 +1592,10 @@ Supported compiler
 Contract syntax and ``-fverify-contracts`` exist **only in this repository's
 Clang**. Use the shipped ``./build/bin/cpp-verify`` and
 ``./build/bin/clang++`` for any code that uses contracts — stock GCC or upstream
-Clang reject the flag and the contract constructs. (Building cpp-verify itself from
-source is independent and works with any standard host compiler.)
+Clang reject the flag and the contract constructs. Code that those compilers
+also build guards the constructs with the predefined ``__cppverify__``
+(:doc:`syntax`, "Headers shared with other compilers"). (Building cpp-verify
+itself from source is independent and works with any standard host compiler.)
 
 Compile with contracts (``clang++``)
 ------------------------------------
@@ -1761,8 +1764,8 @@ Then point the editor at this clangd:
   language server settings.
 
 A tool that does not use this build's parser (a stock clangd, Visual Studio's IntelliSense)
-reports the constructs as errors; a stock ``clang-format`` keeps every clause on the
-declarator's line. Tools built on this build's libclang see the contracts as well.
+reports the constructs as errors, except those guarded by ``__cppverify__``, which it
+does not define; a stock ``clang-format`` keeps every clause on the declarator's line. Tools built on this build's libclang see the contracts as well.
 
 Contracts in Clang's other tools
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

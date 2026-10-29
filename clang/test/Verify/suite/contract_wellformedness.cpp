@@ -180,7 +180,7 @@ int read_ahead(const int *p, int i)
 {
   return p[i];
 }
-// CHECK: [[@LINE-4]]:37: error: verification failed: read_ahead [bounds]
+// CHECK: [[@LINE-4]]:40: error: verification failed: read_ahead [bounds]
 // BMC: error: verification failed: read_ahead [bounds]
 
 int one(int x)
@@ -279,7 +279,7 @@ int next_object(const int *p, const int *q)
   p = p + 1;
   return q[0];
 }
-// CHECK: [[@LINE-5]]:37: error: verification failed: next_object [bounds]
+// CHECK: [[@LINE-5]]:40: error: verification failed: next_object [bounds]
 
 int prev_object(const int *p, const int *q)
   cppverify::pre(valid(p, 2) && valid(q, 2) && q == p + 2 && p[2] == 0)

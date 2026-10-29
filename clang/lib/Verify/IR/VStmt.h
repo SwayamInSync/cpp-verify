@@ -39,6 +39,7 @@ enum class ProofObligationKind {
   Deallocation,
   MissingReturn,
   Unreachable,
+  BuiltinArgument,
   Unsupported
 };
 
@@ -161,9 +162,12 @@ cloneMemoryChecks(const std::vector<VMemoryCheck> &Checks);
 struct VAssertStmt : VStmt {
   std::unique_ptr<VExpr> Cond;
   ProofObligationKind ProofKind;
+  /// For an unsupported obligation: what the verifier does not model here.
+  std::string Note;
   VAssertStmt(std::unique_ptr<VExpr> C, SourceLocation Loc,
-              ProofObligationKind ProofKind)
-      : VStmt(Assert, Loc), Cond(std::move(C)), ProofKind(ProofKind) {}
+              ProofObligationKind ProofKind, std::string Note = "")
+      : VStmt(Assert, Loc), Cond(std::move(C)), ProofKind(ProofKind),
+        Note(std::move(Note)) {}
 };
 
 struct VAssumeStmt : VStmt {
@@ -240,6 +244,9 @@ struct VCallStmt : VStmt {
   /// SSA companion receiving the lifetime identity of a pointer result.
   std::string ResultProvenanceTarget;
   bool IsProofCall = false;
+  /// The callee has a body and no contract: the call runs its body, which
+  /// inlineHelperCalls puts in its place.
+  bool InlinesHelper = false;
   /// The call expression: the callee's name and the call's extent.
   SourceSpan CallSite;
   VCallStmt(std::string Callee, std::string CalleeIdentity,
@@ -359,6 +366,9 @@ struct VFunction {
   /// The definition's source, its contract included, where a failure of
   /// one of its checks may be shown.
   SourceRange Extent;
+  /// The definitions of the helpers inlined into it, where a failure of one
+  /// of their checks may be shown too.
+  std::vector<SourceRange> InlinedExtents;
   bool NeedsDecreasesCheck = false;
   /// decreases(*) on the function or one of its loops: it may diverge.
   SourceLocation DivergenceLoc;
@@ -395,6 +405,13 @@ struct VFunction {
   bool IsChoice = false;
   /// Supplied by <cppverify.h> rather than written in the program.
   bool IsBuiltin = false;
+  /// Converted only to be inlined where it is called (it has no contract):
+  /// neither verified nor reported.
+  bool IsInlineHelper = false;
+  /// No contract clause: only its body (assertions, loop contracts) states
+  /// what to verify, where verified code calls it, or on its own when none
+  /// does.
+  bool WithoutContract = false;
   /// inductive: the least predicate its body defines, a function that is
   /// true where some finite derivation shows it.
   SourceLocation InductiveLoc;

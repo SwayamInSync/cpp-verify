@@ -42,12 +42,16 @@ class ASTConverter {
   std::vector<std::unique_ptr<VStmt>> *SubobjectSink = nullptr;
   unsigned SubobjectPointerId = 0;
   /// Where the statement or condition being lowered in executable code puts
-  /// the calls its expressions make, each into a temporary, in evaluation
-  /// order; null where no executable call can be made.
+  /// the calls and writes its expressions make, each value into a temporary,
+  /// in evaluation order; null where no executable call can be made.
   std::vector<std::unique_ptr<VStmt>> *CallSink = nullptr;
-  /// The temporary of each call already put there, so converting an
-  /// expression twice calls once.
-  std::map<const CallExpr *, std::string> HoistedCalls;
+  /// The temporary of each call, increment, decrement, or assignment already
+  /// put there, and its type, and each comma whose first operand is (with no
+  /// temporary), so converting an expression twice evaluates it once.
+  std::map<const Expr *, std::pair<std::string, VType>> HoistedValues;
+  /// The next statement converted is a write an expression makes, which
+  /// continues its evaluation and keeps HoistedValues.
+  bool ContinuesEvaluation = false;
   std::vector<ConversionError> Errors;
   /// The innermost declaration, statement, or expression being converted,
   /// where an error is reported unless it names a place of its own.
@@ -192,7 +196,10 @@ private:
   bool contractMath() const {
     return InContractExpression && IntMode == VIntMode::Machine;
   }
-  std::unique_ptr<VFunction> convertFunction(const FunctionDecl *FD);
+  /// \p AsInlineHelper converts a function without a contract, which is
+  /// otherwise not converted, for inlining at its calls.
+  std::unique_ptr<VFunction> convertFunction(const FunctionDecl *FD,
+                                             bool AsInlineHelper = false);
   /// Numbers the nondeterministic choices of contract_assert(...) by.
   unsigned NextAssertBy = 0;
   /// The functions choose(...) expressions are lifted to.
@@ -235,6 +242,49 @@ private:
   /// std::max(a, b), or std::min(a, b), of two integers, as the standard
   /// defines it.
   std::unique_ptr<VExpr> convertMinOrMax(const CallExpr *CE, bool IsMax);
+  /// A call of a bit-counting or byte-swapping builtin, by its definition;
+  /// nullopt for any other call.
+  std::optional<std::unique_ptr<VExpr>> convertBitBuiltin(const CallExpr *CE);
+  /// The models of <cppverify.h> (cppverify::model) that converted calls
+  /// use, in the order of their first use.
+  std::vector<const FunctionDecl *> UsedLibraryModels;
+  /// The definitions of the functions without contracts that converted
+  /// calls inline, in the order of their first call.
+  std::vector<const FunctionDecl *> UsedInlineHelpers;
+  /// Why the body of a helper, by identity, could not be converted.
+  std::map<std::string, std::string> UnconvertedHelpers;
+  /// A function whose calls run its body where they are written: it has a
+  /// definition the converter can inline and no contract. A constexpr one is
+  /// lifted as a spec instead, and one of a system header is not inlined.
+  bool isInlineHelper(const FunctionDecl *FD) const;
+  /// A call of \p FD becomes a call statement: its contract stands for it,
+  /// or its body is inlined.
+  bool lowersToCall(const FunctionDecl *FD) const;
+  /// Whether a call of \p FD may write memory its caller can see: for a
+  /// contracted function, what its contract allows; for an inline helper,
+  /// what its body stores through a pointer, a reference, or its object, to
+  /// a global, or by a call that may write. \p Visiting holds the helpers
+  /// whose bodies are being scanned (a recursive one may write).
+  bool callMayWrite(const FunctionDecl *FD,
+                    std::set<const FunctionDecl *> &Visiting) const;
+  /// \p S, a call converted from \p Call, with where the call is written;
+  /// a call of an inline helper is marked, and its helper recorded.
+  std::unique_ptr<VCallStmt> atCall(std::unique_ptr<VCallStmt> S,
+                                    const Expr *Call);
+  /// The model named \p Name whose first parameter points to \p Element.
+  const FunctionDecl *libraryModel(llvm::StringRef Name,
+                                   QualType Element) const;
+  /// A call of memcpy, memmove, memset, or memcmp: a call of its model for
+  /// the objects its pointers address, into \p Out, with its result in
+  /// \p Result unless that is empty; the model, or null after an error.
+  /// Nothing for any other call.
+  std::optional<const FunctionDecl *>
+  convertLibraryCall(const CallExpr *CE,
+                     std::vector<std::unique_ptr<VStmt>> &Out,
+                     const std::string &Result);
+  /// abs, labs, llabs, and std::abs of an integer: its definition, in the
+  /// parameter's type (mathematical in a spec); nothing for any other call.
+  std::optional<std::unique_ptr<VExpr>> convertAbs(const CallExpr *CE);
   void noteSpecUse(const FunctionDecl *FD);
   std::unique_ptr<VExpr> convertExpr(const Expr *E);
   std::unique_ptr<VExpr> convertExprImpl(const Expr *E);
@@ -403,7 +453,21 @@ private:
   /// in the call sink, and a read of the temporary.
   std::unique_ptr<VExpr> hoistExecCall(const CallExpr *CE,
                                        const FunctionDecl *Callee);
-  /// A call of a contracted executable function, which may be hoisted.
+  /// An increment, a decrement, or an assignment whose value an expression
+  /// uses: its statements in the call sink, and a read of the value it has,
+  /// the old one for a postfix operator, in a temporary.
+  std::unique_ptr<VExpr> hoistSideEffect(const Expr *E);
+  /// The variables that the increments, decrements, and assignments in \p S
+  /// write (a field of a record held by value as its record's), and whether
+  /// one writes memory.
+  void collectWrites(const Stmt *S, std::set<const VarDecl *> &Written,
+                     bool &Memory) const;
+  /// Whether an increment, a decrement, or an assignment in \p Writer writes
+  /// a variable \p Reader names, or memory when \p ReaderReadsMemory.
+  bool writesWhatReads(const Expr *Writer, const Expr *Reader,
+                       bool ReaderReadsMemory) const;
+  /// A call of an executable function that becomes a call statement, which
+  /// may be hoisted.
   bool isExecCall(const Stmt *S) const;
   bool containsExecCall(const Stmt *S) const;
   /// A call that may write memory: its callee states a frame or takes a
