@@ -4088,7 +4088,8 @@ class PassivizerImpl {
         Pointer->ProvenanceVariable.empty() || Assigned.count(Pointer->Name) ||
         Assigned.count(Pointer->ProvenanceVariable))
       return false;
-    const auto &[Type, Bytes] = Object->second;
+    const VType &Type = Object->second.first;
+    const uint64_t Bytes = Object->second.second;
     CloneCtx Ctx{Renames, OldState, false};
     auto Base = cloneExpr(Root, Ctx);
     auto At = [&](uint64_t Offset) {
@@ -5677,7 +5678,9 @@ public:
       const CloneCtx &Ctx, SourceLocation Loc) {
     if (!Fn.ObjectModel)
       return;
-    for (const auto &[Name, Identity] : Callee.RecordParams) {
+    for (const auto &Param : Callee.RecordParams) {
+      const std::string &Name = Param.first;
+      const std::string &Identity = Param.second;
       auto Actual = ParamMap.find(Name);
       const bool Dynamic = DynamicParams.count(Name);
       if (Actual == ParamMap.end() ||
