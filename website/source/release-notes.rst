@@ -563,6 +563,14 @@ object, or ``-fverify-report=<file>``); a file without a function to verify
 says nothing, and the reference shows a CMake recipe, with ``-fno-verify``
 for fast development builds (:doc:`language/tooling`).
 
+**Verification before code generation.** ``clang++ -fverify-contracts``
+verified on a thread of its own while it generated code from the same AST,
+and code generation fills caches of the AST and of the source manager that
+the verifier reads: a ThreadSanitizer build of Clang reported races on type
+sizes, linkage, and source lines in 4 of 4 compilations of a file with
+contracts and templates. A compilation now verifies first, and a failure
+stops it before any code is generated.
+
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
 the first column of its last token, compiler errors stayed text, and nothing
