@@ -6645,6 +6645,10 @@ std::unique_ptr<VExpr> ASTConverter::convertExprImpl(const Expr *E) {
     return convertExpr(Default->getExpr());
   if (const auto *Default = dyn_cast<CXXDefaultInitExpr>(E))
     return convertExpr(Default->getExpr());
+  // A comparison C++20 rewrites in terms of another operator (`a != b`
+  // through `operator==`, or `b == a` reversed) is what it is rewritten to.
+  if (const auto *Rewritten = dyn_cast<CXXRewrittenBinaryOperator>(E))
+    return convertExpr(Rewritten->getSemanticForm());
   // A constant Clang evaluates (a consteval call, an if constexpr
   // condition), a character literal, and an expression that evaluates
   // nothing at run time (noexcept, a requires-expression, a concept, a type
