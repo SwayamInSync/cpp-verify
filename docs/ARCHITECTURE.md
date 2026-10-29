@@ -1804,12 +1804,27 @@ runs in a fresh solver with the remaining budget, since Z3's incremental core
 is much slower on thousands of ground equations. The probe only chooses
 models: an end the solver cannot prove adds nothing, and a model at an end
 that holds under the definitions pins the search to that counterexample. The
-probe has half the slice left, and its time moves the slice's end, so
-refinement keeps the rest. Its searches, one for each end of each argument,
-take turns, each check with an equal share of the time left, and each doubles
-its distance while the solver finds a value beyond and then halves the gap
-below the first distance it cannot reach (`ExtremeSearch`), so a 32-bit end
-takes at most 65 checks. Before, the ends ran one after the other and each
+probe's time moves the slice's end, so refinement keeps the rest. Its
+searches, one for each end of each argument, take turns, each check with an
+equal share of what is left of two budgets, and each doubles its distance
+while the solver finds a value beyond and then halves the gap below the first
+distance it cannot reach (`ExtremeSearch`), so a 32-bit end takes at most 65
+checks. The budgets are `DomainProbeUnits` (2 million) Z3 resource units, a
+check's `rlimit` and charged with the units it used, and half the slice in CPU
+time of the probe's own thread (`ThreadCpuClock`, read by the check's
+watchdog, which interrupts the check past its share), never wall-clock time
+but for the query's deadline. With half the slice in wall-clock time, the
+probe of `strictly_grows` (`induction_schemes.cpp`, `--timeout=10000`), which
+needs 13,000 units and 12 ms on an idle machine to pin the counterexample at
+`n = 1`, found no end with 32 runs sharing two cores in 10 of 32 runs, and
+the function ended `spec.fuel`, as it had on macOS CI; now it fails in all
+32. Units alone do not bound a search over sequences: a check of
+`count_reverse` (`sequence_induction.cpp`) spent 5 s on 700,000 units, and
+the file took 34 s instead of 17 s; with the CPU-time budget it takes 15 s.
+In the suite's 268 probes under the old limit, the 74 that found an end
+within it used at most 1.1 million units, and one cut off at the limit had
+used 1.8 million. Where a platform does not read a thread's CPU time, the
+time budget is wall-clock time, as before. Before, the ends ran one after the other and each
 restarted at distance 1 after every overshoot, hundreds of checks for a 32-bit
 end: on the efficiency cores of an M1 the first end spent the budget, and
 `fibo_strict` (`spec_post_unfolded.cpp`), whose counterexample lies at the
