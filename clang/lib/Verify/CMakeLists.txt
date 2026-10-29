@@ -98,9 +98,13 @@ if(CPPVERIFY_SANITIZER)
     list(APPEND _cppverify_sanitize_flags -fno-sanitize=vptr,function)
   endif()
   message(STATUS "cpp-verify: sanitizers ${_cppverify_sanitizers}")
+  # A precompiled header of the libraries it uses is built without them.
   target_compile_options(clangVerify PRIVATE ${_cppverify_sanitize_flags})
+  set_target_properties(clangVerify PROPERTIES DISABLE_PRECOMPILE_HEADERS ON)
   if(TARGET obj.clangVerify)
     target_compile_options(obj.clangVerify PRIVATE ${_cppverify_sanitize_flags})
+    set_target_properties(obj.clangVerify PROPERTIES
+      DISABLE_PRECOMPILE_HEADERS ON)
   endif()
   set_property(GLOBAL PROPERTY CPPVERIFY_SANITIZE_FLAGS
     "${_cppverify_sanitize_flags}")
