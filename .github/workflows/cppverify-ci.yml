@@ -118,13 +118,14 @@ jobs:
           fi
 
       # A use after a move depends on the order in which the host compiler
-      # evaluates operands, as the macOS failures before 0.1.0 did.
+      # evaluates operands, as the macOS failures before 0.1.0 did. The host
+      # compiler's own clang-tidy reads the precompiled headers it wrote.
       - name: Check the verifier with clang-tidy
         if: matrix.config == 'assertions'
         run: |
-          ninja -C build clang-tidy
+          sudo apt-get install -y clang-tidy-18
           find clang/lib/Verify clang/tools/cpp-verify -name '*.cpp' -print0 |
-            xargs -0 -P "$(nproc)" -n 1 build/bin/clang-tidy -p build --quiet \
+            xargs -0 -P "$(nproc)" -n 1 clang-tidy-18 -p build --quiet \
               --checks='-*,bugprone-use-after-move' --warnings-as-errors='*'
 
       - name: Report the versions
