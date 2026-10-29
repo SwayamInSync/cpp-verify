@@ -28,6 +28,7 @@ add_clang_library(clangVerify
   Frontend/ASTConverter.cpp
   Transform/Passivize.cpp
   Transform/Inductive.cpp
+  Transform/InlineHelpers.cpp
   Transform/Origins.cpp
   Transform/Ownership.cpp
   Transform/OutParameters.cpp

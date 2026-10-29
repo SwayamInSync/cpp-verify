@@ -281,7 +281,9 @@ C++ leaves the order of most operands open (a binary operator's, a
 subscript's array and index, a call's arguments, and before C++17 an
 assignment's two sides), and the verifier checks one order, so a call that
 may write memory (a callee with `cppverify::modifies`, a pointer or
-reference parameter, or a non-const member function) beside an operand
+reference parameter, or a non-const member function; a callee without a
+contract whose body, or a call in it, stores through a pointer, a reference,
+or its object, or to a global) beside an operand
 that reads memory or makes a call is an error: `add_one(p) + *p` is one,
 with a different value in each order. An assignment evaluates its right
 operand first, as C++17 sequences it, so `a[add_one(p)] = *p` stores the
@@ -297,6 +299,24 @@ operator's before the write. Each expression is evaluated once, so
 `a[i++] += 1` increments `i` once. A write in one unsequenced operand that
 another reads (`i++ + i`, which C++ leaves undefined) is an error, as is a
 write to memory beside an operand that reads memory.
+
+### Calls of functions without contracts
+
+A call of a function that has a body and no contract runs that body: the
+verifier inlines it at the call, as Kani and CBMC inline every call and as
+SPARK's GNATprove inlines a subprogram without a contract ("contextual
+analysis"). The caller's proof then covers the body at the arguments the
+caller passes, the body's checks are the caller's, and it reads and writes
+the caller's objects within the caller's frame. Such a function is verified
+where verified code calls it and on its own only when none does, since
+without a precondition its own verification would check inputs no caller
+passes. Recursion, a record returned by value, dynamic storage, a loop
+invariant that uses `cppverify::old` (the inlined body's entry is not the
+caller's), and more than 2000 statements inlined into one function are left
+to a contract: the call is `Unresolved` (`construct.unsupported`) with a
+message that names the helper and asks for one. A `constexpr` function
+without a contract is still lifted as a spec, a constructor without one is
+not inlined, and a function without a body (a library's) is still an error.
 
 ## Loop Contracts: invariant / decreases
 

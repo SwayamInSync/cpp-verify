@@ -87,6 +87,7 @@ std::unique_ptr<VStmt> verify::cloneVStmt(const VStmt *S) {
     auto Copy = std::make_unique<VCallStmt>(
         C.Callee, C.CalleeIdentity, std::move(Args), C.ResultTarget, C.Loc,
         C.IsProofCall, C.ResultProvenanceTarget);
+    Copy->InlinesHelper = C.InlinesHelper;
     Copy->CallSite = C.CallSite;
     return Copy;
   }
@@ -162,6 +163,8 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.IsExternalContract = Fn.IsExternalContract;
   Out.IsTrusted = Fn.IsTrusted;
   Out.IsBuiltin = Fn.IsBuiltin;
+  Out.IsInlineHelper = Fn.IsInlineHelper;
+  Out.WithoutContract = Fn.WithoutContract;
   Out.InductiveLoc = Fn.InductiveLoc;
   Out.Unfolding = cloneVExpr(Fn.Unfolding.get());
   Out.InductiveStepOf = Fn.InductiveStepOf;
@@ -178,6 +181,7 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
     Out.Behaviors.emplace_back(Name, cloneVExpr(Assumes.get()));
   Out.DeclLoc = Fn.DeclLoc;
   Out.Extent = Fn.Extent;
+  Out.InlinedExtents = Fn.InlinedExtents;
   Out.NeedsDecreasesCheck = Fn.NeedsDecreasesCheck;
   Out.DivergenceLoc = Fn.DivergenceLoc;
   Out.DivergenceDeclared = Fn.DivergenceDeclared;

@@ -603,6 +603,20 @@ Where C++ leaves the order of operands open, a write that another operand may
 read is an error at the expression, as such a call already was
 (:doc:`language/functions-loops`).
 
+**Functions without contracts.** A call of a function without a contract
+stopped its caller (``call to function without a verification contract``),
+so every small helper needed a contract before its callers could be
+verified. A call of one with a body now runs that body: the verifier inlines
+it, so the caller's proof covers it at the arguments the caller passes, its
+checks are the caller's, and a failure in it is shown at its operation in the
+caller's verdict, with its variables named ``helper::x``. Helpers may hold
+loops with their invariants, early returns, and calls of other functions,
+and member functions are helpers too. Such a function is verified where
+verified code calls it, and on its own only when none does. Recursion, a
+record returned by value, allocation, ``cppverify::old`` in a loop invariant,
+and more than 2000 inlined statements in one function each need a contract,
+and say so (:doc:`language/functions-loops`).
+
 **The C library's memory functions.** A call of ``memcpy``, ``memmove``,
 ``memset``, ``memcmp``, or ``abs`` stopped its function (``call to function
 without a verification contract``). Over arrays of integers, enumerations,

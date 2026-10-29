@@ -2882,8 +2882,9 @@ class Verifier {
   VerifyOptions Opts;
   llvm::raw_ostream *DumpOS = nullptr;
   std::vector<VerifyDiagnostic> Diags;
-  /// Each function's source, by identity (VFunction::Extent).
-  std::map<std::string, SourceRange> Extents;
+  /// Each function's source and that of the helpers inlined into it, by
+  /// identity (VFunction::Extent, InlinedExtents).
+  std::map<std::string, std::vector<SourceRange>> Extents;
   /// What --list-functions prints: each function's location and kind.
   std::vector<std::pair<SourceLocation, std::string>> Listing;
   /// Each contracted function's contract as written, by its identity.
@@ -3103,21 +3104,23 @@ class Verifier {
 
     annotateExpr(Module.CorrectnessGoal.get());
     annotateExpr(Module.CounterexampleQuery.get());
-    // A check is shown in the function it belongs to: one whose condition is
-    // elsewhere, in the body of a lifted helper, stays at its anchor, the
-    // call.
-    SourceRange Extent;
+    // A check is shown in the function it belongs to, or in a helper inlined
+    // into it: one whose condition is elsewhere, in the body of a lifted
+    // helper, stays at its anchor, the call.
+    std::vector<SourceRange> Owned;
     llvm::StringRef Owner = Module.FunctionIdentity;
     if (auto It = Extents.find(Owner.take_front(Owner.find("::")).str());
         It != Extents.end())
-      Extent = It->second;
+      Owned = It->second;
     const SourceManager &SM = Ctx.getSourceManager();
     std::map<std::string, unsigned> StableIdCounts;
     for (Obligation &Item : Module.Obligations) {
       if (Item.Focus.isValid() &&
-          !(Extent.isValid() &&
-            SM.isPointWithin(SM.getExpansionLoc(Item.Focus.Loc),
-                             Extent.getBegin(), Extent.getEnd())))
+          llvm::none_of(Owned, [&](SourceRange Extent) {
+            return Extent.isValid() &&
+                   SM.isPointWithin(SM.getExpansionLoc(Item.Focus.Loc),
+                                    Extent.getBegin(), Extent.getEnd());
+          }))
         Item.Focus = {};
       annotateSource(Item.Loc, Item.BeginLoc, Item.EndLoc, Item.Source);
       annotateSource(Item.Focus.Loc, Item.Focus.BeginLoc, Item.Focus.EndLoc,
@@ -3438,7 +3441,8 @@ public:
     FunctionMap FnMap;
     for (const auto &Fn : Functions) {
       FnMap[Fn->Identity] = Fn.get();
-      Extents[Fn->Identity] = Fn->Extent;
+      Extents[Fn->Identity] = {Fn->Extent};
+      llvm::append_range(Extents[Fn->Identity], Fn->InlinedExtents);
     }
 
     std::vector<std::unique_ptr<VFunction>> InterfaceFunctions;
