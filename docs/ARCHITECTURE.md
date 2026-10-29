@@ -3019,13 +3019,21 @@ needs.
 The whole query of a module without logic functions is a probe of a fixed
 amount of work, `WholeProbeUnits` (6 million) Z3 resource units, with the
 module's timeout as its bound in time, so where it stops depends neither on
-the load nor on the build. It had 500 ms before. In an assertions build, or
+the load nor on the build type. It had 500 ms before. In an assertions build, or
 on a loaded core, the whole query of `certified_failure_attribution.cpp`
 (about 700 thousand units) did not finish in that time; with one job its
 obligations then ran, the postcondition among them, whose own search does
 not end, and the function ended `Unresolved` with `solver.timeout` after
 121 s on one core shared with two busy loops. The assertions build now
-reports the test's counterexample there in 7 s, with one job or three. Every
+reports the test's counterexample there in 7 s, with one job or three. The
+work a search needs still depends on Z3's own build: with a Z3 built by
+Clang, as the release's is, that complete query was not refuted within the
+probe, and the test took the 60 s path again (the release's dry run). Over
+every test program a Clang-built and a GCC-built Z3 decided differently only
+there and in `llvm_uleb128.cpp`, where the Clang-built one proved a function
+the other did not (differential at one job, total 2501 s and 2492 s). The
+test now fails through a check any Z3 refutes at once, after a check (a
+solution of Fermat's equation for cubes) whose search ends in neither. Every
 probe of the test suite that an idle release build decided within 500 ms
 took at most 5.2 million units (99% of the 2622 took less than 200
 thousand); the three that took 5.2 million are those of the UTF-8 case
