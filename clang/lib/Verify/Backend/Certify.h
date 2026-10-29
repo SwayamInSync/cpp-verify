@@ -141,8 +141,12 @@ public:
 
 struct CertifyLimits {
   uint64_t Steps = 50000000;
-  /// Nested evaluation frames; bounds native stack use.
+  /// Nested evaluation frames.
   unsigned Frames = 50000;
+  /// The stack the evaluation runs on. Once half of it is used, the
+  /// evaluation continues on a fresh one, since the stack a frame takes
+  /// depends on the build.
+  unsigned StackBytes = 256U << 20;
   /// Binder values expanded across all bounded quantifiers.
   uint64_t QuantifierInstances = 1000000;
   /// Values tried from each end of a range too wide to expand.
