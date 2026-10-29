@@ -1,0 +1,43 @@
+# REQUIRES: cpp-verify-archive-fuzzer
+#
+# Archives are untrusted input (--obligation-in). The archive fuzzer's target
+# (clang/tools/cpp-verify-archive-fuzzer) checks that an archive is rejected
+# with an error or decodes to modules that validate, that the writer states
+# again byte for byte with the same hashes, whose canonical form validates and
+# is a fixpoint, and that every adapter lowers without a solver. Built without
+# libFuzzer it runs the target on the files it is given: here, archives of
+# programs with every kind of term, and an archive mutated as the input the
+# fuzzer found was.
+#
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %cpp-verify --lower-only --obligation-out=%t/products.cpv %t/products.cpp --
+# RUN: %cpp-verify --lower-only --obligation-out=%t/ir.cpv %S/obligation_ir.cpp --
+# RUN: %cpp-verify --lower-only --obligation-out=%t/collections.cpv %S/collections.cpp --
+# RUN: %cpp-verify --lower-only --obligation-out=%t/sequences.cpv %S/sequences.cpp --
+# RUN: %cpp-verify --lower-only --obligation-out=%t/inductive.cpv %S/inductive_predicates.cpp --
+# RUN: %cpp-verify --lower-only --obligation-out=%t/choose.cpv %S/choose.cpp --
+# RUN: %cpp-verify --lower-only --obligation-out=%t/heap.cpv %S/heap_reading_spec.cpp --
+# RUN: %cpp-verify --backend=bmc --unroll=2 --lower-only --obligation-out=%t/bmc.cpv %S/bmc_incremental.cpp --
+#
+# A product, quotient, or remainder with one operand is an error. The
+# validator read the second operand to describe the term: replay crashed, or
+# printed what it read past the operands (found by the fuzzer).
+# RUN: %python %S/Inputs/mutate_obligation_archive.py unary-product %t/products.cpv %t/unary.cpv
+# RUN: not %cpp-verify --obligation-in=%t/unary.cpv 2>&1 | FileCheck %s --check-prefix=UNARY
+# UNARY: error: invalid obligation archive: malformed obligation term: unexpected operand count
+#
+# RUN: cpp-verify-archive-fuzzer %t/*.cpv 2>&1 \
+# RUN:   | FileCheck %s --implicit-check-not="archive fuzzer:"
+# CHECK: Running: {{.*}}bmc.cpv
+# CHECK: Running: {{.*}}products.cpv
+# CHECK: Running: {{.*}}unary.cpv
+
+#--- products.cpp
+namespace cv = cppverify;
+
+int scale(int a, int b)
+  cv::pre(0 <= a && a <= 1000 && 1 <= b && b <= 1000)
+  cv::post(cv::result == a * b / b + a % b)
+{
+  return a * b / b + a % b;
+}

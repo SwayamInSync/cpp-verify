@@ -1000,6 +1000,17 @@ misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**The archive reader is fuzzed every night.** An archive given to
+``--obligation-in`` is untrusted input. libFuzzer now runs the reader under
+AddressSanitizer for half an hour every night, from the records of the test
+programs' archives: any input must be rejected with an error or decode to
+modules that validate, that are written again byte for byte with the same
+hashes, whose canonical form is a fixpoint, and that the Z3, cvc5, and Lean
+adapters lower. Its first run found a malformed record that crashed replay: a
+product, quotient, or remainder with one operand made the validator read a
+second one to describe the error. It is now ``malformed obligation term:
+unexpected operand count`` (:doc:`language/tooling`).
+
 Data formats
 ~~~~~~~~~~~~
 
