@@ -26,6 +26,33 @@ set(CPPVERIFY_Z3_SOURCE_DIR "" CACHE PATH "Path to a Z3 source tree (overrides t
 get_filename_component(CPPVERIFY_REPO_ROOT
   "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 
+# Z3's timer waits on a std::timed_mutex until a steady_clock time. Under
+# ThreadSanitizer libstdc++ 14.1 to 14.3 and 15.1 to 15.2 declare that wait
+# without the member it calls (GCC PR 121496), so Z3 would fail to compile.
+function(cppverify_z3_check_tsan_library)
+  include(CheckCXXSourceCompiles)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+  set(CMAKE_REQUIRED_FLAGS -fsanitize=thread)
+  check_cxx_source_compiles([[
+#include <chrono>
+#include <mutex>
+bool wait(std::timed_mutex &m) {
+  return m.try_lock_until(std::chrono::steady_clock::now());
+}
+]] CPPVERIFY_TSAN_TIMED_MUTEX_WAIT)
+  if(NOT CPPVERIFY_TSAN_TIMED_MUTEX_WAIT)
+    unset(CPPVERIFY_TSAN_TIMED_MUTEX_WAIT CACHE)
+    message(FATAL_ERROR
+      "Under ThreadSanitizer this C++ library cannot compile "
+      "std::timed_mutex::try_lock_until with a steady_clock time, which the "
+      "vendored Z3 uses: libstdc++ 14.1 to 14.3 and 15.1 to 15.2 have this "
+      "bug (GCC PR 121496), fixed in 14.4 and 15.3. Select another GCC "
+      "installation for C and C++, with Clang for example "
+      "-DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 "
+      "-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13.")
+  endif()
+endfunction()
+
 # Build vendored Z3 as an isolated ExternalProject rather than add_subdirectory.
 #
 # Why ExternalProject and not add_subdirectory: Z3's CMake declares a library
@@ -74,18 +101,30 @@ function(cppverify_z3_build_external)
       list(APPEND _forward "-D${_var}:STRING=${_value}")
     endif()
   endforeach()
+  # So are the flags it was configured with, which the cache keeps without
+  # LLVM's own: one that selects the C++ library, as --gcc-install-dir= or
+  # -stdlib= does, must reach every object linked together.
+  set(_z3_C_flags "$CACHE{CMAKE_C_FLAGS}")
+  set(_z3_CXX_flags "$CACHE{CMAKE_CXX_FLAGS}")
+  set(_z3_EXE_LINKER_flags "$CACHE{CMAKE_EXE_LINKER_FLAGS}")
   # Under ThreadSanitizer Z3 is instrumented too, so that its accesses are
   # checked and its synchronization is seen.
   if(LLVM_USE_SANITIZER MATCHES "Thread")
+    cppverify_z3_check_tsan_library()
     set(_z3_tsan "-fsanitize=thread -fno-omit-frame-pointer")
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
       string(APPEND _z3_tsan " -gline-tables-only")
     endif()
-    list(APPEND _forward
-      "-DCMAKE_C_FLAGS:STRING=${_z3_tsan}"
-      "-DCMAKE_CXX_FLAGS:STRING=${_z3_tsan}"
-      "-DCMAKE_EXE_LINKER_FLAGS:STRING=-fsanitize=thread")
+    string(APPEND _z3_C_flags " ${_z3_tsan}")
+    string(APPEND _z3_CXX_flags " ${_z3_tsan}")
+    string(APPEND _z3_EXE_LINKER_flags " -fsanitize=thread")
   endif()
+  foreach(_kind C CXX EXE_LINKER)
+    string(STRIP "${_z3_${_kind}_flags}" _flags)
+    if(_flags)
+      list(APPEND _forward "-DCMAKE_${_kind}_FLAGS:STRING=${_flags}")
+    endif()
+  endforeach()
 
   ExternalProject_Add(cppverify_z3_ep
     ${_src_args}
