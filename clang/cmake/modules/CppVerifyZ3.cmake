@@ -74,6 +74,18 @@ function(cppverify_z3_build_external)
       list(APPEND _forward "-D${_var}:STRING=${_value}")
     endif()
   endforeach()
+  # Under ThreadSanitizer Z3 is instrumented too, so that its accesses are
+  # checked and its synchronization is seen.
+  if(LLVM_USE_SANITIZER MATCHES "Thread")
+    set(_z3_tsan "-fsanitize=thread -fno-omit-frame-pointer")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      string(APPEND _z3_tsan " -gline-tables-only")
+    endif()
+    list(APPEND _forward
+      "-DCMAKE_C_FLAGS:STRING=${_z3_tsan}"
+      "-DCMAKE_CXX_FLAGS:STRING=${_z3_tsan}"
+      "-DCMAKE_EXE_LINKER_FLAGS:STRING=-fsanitize=thread")
+  endif()
 
   ExternalProject_Add(cppverify_z3_ep
     ${_src_args}
