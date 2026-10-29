@@ -544,6 +544,15 @@ statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Source lookups from parallel failures.** With more than one job, a failure
+whose counterexample passes through a loop gets notes from unrolling the
+loop, and those looked up source lines without the lock that the other
+lookups take, while other functions looked up theirs; so did a failure's
+place when its source was not recorded. The source manager caches its last
+lookup, so this was a data race on that cache, which ThreadSanitizer found
+and which could misplace a note or a check. Every lookup made while functions
+are verified at once now takes the lock.
+
 **Induction for lemmas that time out.** The automatic inductions ran only
 when unfolding a recursive spec could not settle a claim, so a lemma such as
 "an order on adjacent elements is an order on all of them" ended
@@ -574,6 +583,14 @@ directory), and ``-fverify-report`` (the results as JSON Lines beside each
 object, or ``-fverify-report=<file>``); a file without a function to verify
 says nothing, and the reference shows a CMake recipe, with ``-fno-verify``
 for fast development builds (:doc:`language/tooling`).
+
+**Verification before code generation.** ``clang++ -fverify-contracts``
+verified on a thread of its own while it generated code from the same AST,
+and code generation fills caches of the AST and of the source manager that
+the verifier reads: a ThreadSanitizer build of Clang reported races on type
+sizes, linkage, and source lines in 4 of 4 compilations of a file with
+contracts and templates. A compilation now verifies first, and a failure
+stops it before any code is generated.
 
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
@@ -1011,6 +1028,16 @@ on boundary values and samples. CI fails when a ``Verified`` function
 misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
+
+**Sanitizers every night.** The verifier's own code is now built with
+AddressSanitizer and UndefinedBehaviorSanitizer (``-DCPPVERIFY_SANITIZER``),
+and every Verify test program runs through that build every night; a report
+fails the job. The first run found the counterexample checker overflowing
+its stack in 11 programs, since AddressSanitizer makes each level of its
+nesting take many times the stack: the checker now continues on a fresh
+stack once half of its own is used, so its nesting limit holds in every
+build. It found no other memory error or undefined behavior in the verifier
+(:doc:`language/tooling`).
 
 **The archive reader is fuzzed every night.** An archive given to
 ``--obligation-in`` is untrusted input. libFuzzer now runs the reader under
