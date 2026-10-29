@@ -2943,6 +2943,9 @@ class Verifier {
   ASTContext &Ctx;
   VerifyOptions Opts;
   llvm::raw_ostream *DumpOS = nullptr;
+  /// The source manager caches its last lookups, so every lookup that
+  /// functions verified at once make holds this lock.
+  mutable std::recursive_mutex SourceLock;
   std::vector<VerifyDiagnostic> Diags;
   /// Each function's source and that of the helpers inlined into it, by
   /// identity (VFunction::Extent, InlinedExtents).
@@ -3076,6 +3079,7 @@ class Verifier {
   /// when Loc has none.
   ObligationSource sourceOf(SourceLocation Loc, SourceLocation BeginLoc,
                             SourceLocation EndLoc) const {
+    std::lock_guard<std::recursive_mutex> Guard(SourceLock);
     const SourceManager &SourceMgr = Ctx.getSourceManager();
     ObligationSource Found;
     if (!Loc.isValid())
@@ -3132,6 +3136,7 @@ class Verifier {
   }
 
   void annotateObligationSources(ObligationModule &Module) {
+    std::lock_guard<std::recursive_mutex> Guard(SourceLock);
     auto annotateSource = [&](SourceLocation Loc, SourceLocation BeginLoc,
                               SourceLocation EndLoc, ObligationSource &Source) {
       ObligationSource Found = sourceOf(Loc, BeginLoc, EndLoc);
@@ -3751,8 +3756,6 @@ public:
       uint64_t Confirmed = 0;
     };
     std::vector<FunctionRun> Runs(Functions.size());
-    // The source manager caches its last line lookup.
-    std::mutex SourceLock;
     auto verifyFunction = [&](size_t Index) {
       FunctionRun &Run = Runs[Index];
       std::vector<VerifyDiagnostic> &Diags = Run.Diags;
@@ -3845,6 +3848,7 @@ public:
       auto failureNotes = [&](const VFunction &F, const VerifyResult &Failure) {
         std::vector<std::string> Notes;
         auto at = [&](SourceLocation Loc) {
+          std::lock_guard<std::recursive_mutex> Guard(SourceLock);
           const PresumedLoc Where = Ctx.getSourceManager().getPresumedLoc(
               Ctx.getSourceManager().getFileLoc(Loc));
           return Where.isValid() ? std::to_string(Where.getLine()) + ":" +
@@ -4200,10 +4204,6 @@ public:
           return Record.takeError();
         Run.Archive += *Record;
         return llvm::Error::success();
-      };
-      auto annotateObligationSources = [&](ObligationModule &Module) {
-        std::lock_guard<std::mutex> Guard(SourceLock);
-        this->annotateObligationSources(Module);
       };
       // A contract must be defined where it is evaluated (Dafny's
       // well-formedness check): its preconditions in order, and the
