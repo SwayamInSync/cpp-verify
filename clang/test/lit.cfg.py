@@ -133,6 +133,7 @@ tools = [
     "clang-scan-deps",
     "clang-installapi",
     ToolSubst("%cpp-verify", command=FindTool("cpp-verify"), unresolved="fatal"),
+    "cpp-verify-archive-fuzzer",
     "opt",
     "llvm-ifs",
     "yaml2obj",
@@ -436,6 +437,10 @@ if lit.util.which("lake", config.environment["PATH"]):
 
 if lit.util.which("cvc5", config.environment["PATH"]):
     config.available_features.add("cvc5")
+
+# The archive fuzzer is built beside cpp-verify but not shipped with it.
+if lit.util.which("cpp-verify-archive-fuzzer", config.clang_tools_dir):
+    config.available_features.add("cpp-verify-archive-fuzzer")
 
 # The Z3 shell of the Z3 cpp-verify links, for scripts cpp-verify writes.
 if config.cppverify_z3_shell and os.path.exists(config.cppverify_z3_shell):

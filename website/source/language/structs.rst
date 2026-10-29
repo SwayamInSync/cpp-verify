@@ -732,6 +732,35 @@ and fails ``aliasing``. Using the reference such an operator returns, as in
 ``(a |= b) |= b``, ``Bits c = (a |= b);``, or ``c = (a |= b);``, is an error;
 a free operator is a free function and returns its value as one does.
 
+From C++20 a comparison may be rewritten in terms of another operator:
+``a != b`` with only ``operator==`` declared is ``!(a == b)``, and ``5 == r``
+with only ``R::operator==(int)`` is ``r == 5``. The verifier checks the call
+it is rewritten to, with that operator's contract:
+
+.. cppverify-example: flags --extra-arg=-std=c++20
+
+.. code-block:: cpp
+
+   struct R {
+     int v;
+     bool operator==(int o) const
+       cv::post(cv::result == (v == o))
+     {
+       return v == o;
+     }
+   };
+
+   bool not_five(const R &r)
+     cv::post(cv::result == (r.v != 5))
+   {
+     return 5 != r;
+   }
+
+.. code-block:: text
+
+   Verified: R::operator== [backend=z3]
+   Verified: not_five [backend=z3]
+
 Constructors
 ------------
 
