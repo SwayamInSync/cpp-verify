@@ -470,6 +470,24 @@ of a constant table, a ``const`` or ``constexpr`` array with a constant
 initializer or a string literal, is now the value its initializer gives it,
 and each index must lie in its array (:doc:`language/pointers`).
 
+**Global records and arrays.** Only integral globals were supported; a
+record or array global was an error (``global aggregate access is
+unsupported``, ``the global array 'table' is unsupported``). A mutable global
+of a record or array type is now an object at a fixed address of its own:
+its fields and elements are cells, each index bounded by its array, written
+only within ``cppverify::modifies`` (the whole object, a field, an element, or a
+range such as ``history[0 : 8]``), and a pointer into it is bounded by the
+array, field, or record it is formed from, so it may be passed as a slice
+(:doc:`language/pointers`).
+
+**Static locals.** A static local that was not a constant table was an
+error (``static local variables are unsupported``). One with a constant
+initializer is now its function's own state: any value at entry, written
+without a frame, and changed by a call exactly when the callee may reach its
+function, directly or through other calls. An initializer that runs code at
+the first call, and a pointer to or into a static local, are errors
+(:doc:`language/pointers`).
+
 **assert and calls that do not return.** ``assert(c)`` stopped its function
 (``unsupported statement: ParenExpr``), and a call to ``abort`` or ``exit``
 was an error (``call to function without a verification contract``).
@@ -545,6 +563,17 @@ for every verified function that applies a spec, the first branch,
 reaches gets a warning, which says that the code is dead or a fact is wrong.
 A ``cppverify::check`` of the fact before it keeps a dead branch on purpose
 (:doc:`book/part-ii/ch16-when-verification-fails`).
+
+**Verification in a build.** ``clang++ -fverify-contracts`` verified every
+file with the defaults (Z3, 30 seconds a query, one job), and each file
+without contracts warned ``no verifiable functions found``, so a build that
+gave the flag to every file printed a warning for most of them. A compilation
+now takes ``-fverify-backend=``, ``-fverify-timeout=``, ``-fverify-jobs=``,
+``-fverify-cache=`` (proofs shared by every compilation that names the
+directory), and ``-fverify-report`` (the results as JSON Lines beside each
+object, or ``-fverify-report=<file>``); a file without a function to verify
+says nothing, and the reference shows a CMake recipe, with ``-fno-verify``
+for fast development builds (:doc:`language/tooling`).
 
 **Results as records, SARIF, and annotations.** JSON records had no source
 for a verified function, a failure's range began at its caret and ended at
@@ -811,6 +840,20 @@ not end then ran to the timeout: a false claim took minutes and ended
 solver work (6 million Z3 resource units), with the timeout only as a bound
 in time, so it stops where it would on an idle machine
 (:doc:`language/tooling`).
+
+**Counterexamples at the end of a range, under load.** When the solver's
+first candidate needs a spec at a large argument, such as ``fibo(7310)`` for a
+claim false only at ``n == 1``, the verifier searches for the least and
+greatest values the argument may take and checks the models there. That
+search had half of a refinement slice of wall-clock time, 250 ms at
+``--timeout=10000``; an idle machine needs 12 ms for it, but a loaded one
+could run out, and the function ended ``Unresolved`` with ``spec.fuel``. On
+macOS CI that happened to ``strictly_grows`` in ``induction_schemes.cpp``,
+and with 32 runs sharing two cores to 10 of 32. The search now has a budget of
+solver work (2 million Z3 resource units) and of the CPU time of its own
+thread (the same half slice), which the load of other processes does not use
+up, so it stops where it would on an idle machine; all 32 runs fail with the
+counterexample (:doc:`language/tooling`).
 
 **cvc5 1.4.** Every query over sets, multisets, and maps failed with cvc5 1.4,
 which requires extended arrays for constant arrays; such a query now enables

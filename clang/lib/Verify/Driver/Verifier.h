@@ -4,6 +4,7 @@
 
 #include "../Backend/VerifyBackend.h"
 #include "DiagnosticPart.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <memory>
@@ -153,6 +154,12 @@ struct VerifyOptions {
   /// without a definition holds for now, and a proof that rests on it says
   /// so ([assumes=...]): the check of the files together settles it.
   std::string ContractsOut;
+  /// Where to write the results as JSON Lines records, besides the output,
+  /// ending with the summary record.
+  std::string ReportPath;
+  /// A file with no function to verify says nothing, as in a compilation,
+  /// where most files have none.
+  bool QuietWithoutFunctions = false;
 };
 
 /// One run over several files. A contract that a file declares without a
@@ -190,6 +197,11 @@ unsigned checkContracts(const std::vector<std::string> &Paths,
 /// result is the file's as far as it alone decides.
 bool verifyTranslationUnit(ASTContext &Ctx, llvm::raw_ostream &OS,
                            const VerifyOptions &Opts = VerifyOptions());
+
+/// The cppverify.summary/1 record of \p Summary: the counts of the summary
+/// line, by name, without the time, so that records do not depend on the
+/// run.
+llvm::json::Object summaryRecord(const VerifySummary &Summary);
 
 /// What exporting the modules of an archive to a Lean project gives: a
 /// result for each module, in order, with the goals cppverify_auto proves of

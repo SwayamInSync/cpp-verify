@@ -397,8 +397,7 @@ int names_variable()
 }
 // CHECK-DAG: range_for.cpp:[[@LINE-5]]:3: error: names_variable: the contract of a range-based for loop cannot name its variable, which each iteration declares; name the element with cppverify::index
 
-// Not supported: a range that may move, and a range over a class.
-// A global array is not supported, nor an array of arrays.
+// A global array is an object like a local one.
 int Counts[4] = {1, 2, 3, 4};
 
 int over_global()
@@ -409,7 +408,10 @@ int over_global()
     s = v;
   return s;
 }
-// CHECK-DAG: range_for.cpp:[[@LINE-4]]:3: error: over_global: a range-based for loop over an array of the global 'Counts' is unsupported
+// CHECK-DAG: Verified: over_global
+
+// Not supported: a range that may move, a range over a class, and an array
+// of arrays.
 
 int first_column()
   cv::post(true)

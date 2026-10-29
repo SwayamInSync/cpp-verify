@@ -117,7 +117,7 @@ cppverify::proof void nonterminating_proof()
 // VERIFY-DAG: error: proof_heap_store: proof functions cannot modify executable memory
 // VERIFY-DAG: error: proof_exec_call: proof-only code cannot call executable functions
 // VERIFY-DAG: error: ghost_pointer_store: ghost code cannot modify executable state
-// VERIFY-DAG: error: proof_global_store: global aggregate assignment is unsupported
+// VERIFY-DAG: error: proof_global_store: ghost and proof code cannot modify the global runtime_cell
 // VERIFY-DAG: error: user_defined_assignment: user-defined aggregate assignment is unsupported
 // VERIFY-DAG: error: ghost_return: ghost code cannot alter executable control flow
 // VERIFY-DAG: error: ghost_nonterminating_loop: proof-only loops require a decreases clause
