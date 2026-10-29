@@ -133,6 +133,7 @@ tools = [
     "clang-scan-deps",
     "clang-installapi",
     ToolSubst("%cpp-verify", command=FindTool("cpp-verify"), unresolved="fatal"),
+    "cpp-verify-archive-fuzzer",
     "opt",
     "llvm-ifs",
     "yaml2obj",
