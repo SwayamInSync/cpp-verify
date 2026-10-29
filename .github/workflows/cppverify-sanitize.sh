@@ -8,9 +8,8 @@
 #
 # LLVM's allocators poison memory in the instrumented code's copies of their
 # inline functions, which the uninstrumented libraries then use, so poisoning
-# by hand is off; threads get 1 GiB stacks, since instrumented frames are many
-# times larger and the counterexample checker recurses deeply. Each program
-# runs with two jobs, so the pool runs under the sanitizers too.
+# by hand is off. Each program runs with two jobs, so the pool runs under the
+# sanitizers too.
 set -u
 BUILD=$1
 PARALLEL=${2:-$(nproc)}
@@ -22,7 +21,6 @@ export OUT TESTS
 export CPPVERIFY=$BUILD/bin/cpp-verify
 export ASAN_OPTIONS=detect_leaks=0:allow_user_poisoning=0
 export UBSAN_OPTIONS=print_stacktrace=1
-ulimit -s 1048576
 
 run() {
   local file=$1 name
