@@ -997,6 +997,19 @@ and every Verify test program runs through that build every night; a report
 fails the job. The first run found no memory error or undefined behavior in
 the verifier (:doc:`language/tooling`).
 
+**ThreadSanitizer every night.** LLVM, Clang, the verifier, and Z3 are also
+built with ThreadSanitizer (``-DLLVM_USE_SANITIZER=Thread``), and every Verify
+test program runs through that build with four jobs, a proof cache, and the
+race backend where its tests race Z3 against cvc5; a report fails the job. A
+TSan run used to crash or hang inside the runtime: the counterexample
+checker's evaluation nests deeper than the 65536 frames of TSan's shadow
+stack, which TSan does not check. The checker is now built without TSan's
+function entry and exit hooks, its accesses still checked, and a TSan build
+of ``cpp-verify`` stops with the offending stack if any other code nests that
+deep. The first run found one data race in the verifier, on the source
+manager's cache ("Source lookups from parallel failures" above)
+(:doc:`language/tooling`).
+
 Data formats
 ~~~~~~~~~~~~
 
