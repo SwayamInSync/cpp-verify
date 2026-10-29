@@ -3612,7 +3612,21 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   fails the job too, since a runtime that hangs reports nothing.
   `cppverify-tsan.supp` suppresses three data races and a lock order inside
   Z3 4.13.4 and the calls LLVM's crash handler makes in a signal handler,
-  each explained there. Two things make a report trustworthy:
+  each explained there. Z3's build gets the flags the build was configured
+  with (the cache's `CMAKE_C_FLAGS`, `CMAKE_CXX_FLAGS`, and
+  `CMAKE_EXE_LINKER_FLAGS`, which hold none of LLVM's own) before TSan's,
+  so a flag that selects the C++ library reaches every object linked
+  together. Z3's timer waits on a `std::timed_mutex` until a `steady_clock`
+  time, which libstdc++ 14.1 to 14.3 and 15.1 to 15.2 cannot compile under
+  TSan (GCC PR 121496): there `_GLIBCXX_USE_PTHREAD_MUTEX_CLOCKLOCK` is 0
+  under TSan, but two of the header's tests of it ask only whether it is
+  defined, so `std::timed_mutex`'s wait calls a member it does not
+  declare. Configure
+  checks this (`CPPVERIFY_TSAN_TIMED_MUTEX_WAIT`) and says how to select
+  another GCC installation. Clang takes the newest GCC on the runner's
+  image, 14.2, so the job selects GCC 13's with `--gcc-install-dir`; its
+  wait calls `pthread_mutex_clocklock`, which LLVM 18's TSan intercepts.
+  Two things make a report trustworthy:
   - TSan records each instrumented call on a per-thread shadow stack of
     64 Ki frames (`kShadowStackSize`), and only a debug runtime checks the
     bound. The counterexample checker nests up to `CertifyLimits::Frames`
