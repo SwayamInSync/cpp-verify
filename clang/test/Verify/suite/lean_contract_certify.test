@@ -11,7 +11,7 @@
 # RUN: %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_contract_certify.cpp -- 2>&1 | FileCheck %s --check-prefix=CERTIFIED
 #
 # The check's proof left a stub: the contract establishes nothing.
-# RUN: sed -i 's/^  omega$/  sorry/' %t/p/CppVerify/Proofs/cppverify_sensor_contract_eb6f5c/cppverify_sensor_contract_eb6f5c_division_by_zero_d81a153d.lean
+# RUN: sed -i.orig 's/^  omega$/  sorry/' %t/p/CppVerify/Proofs/cppverify_sensor_contract_eb6f5c/cppverify_sensor_contract_eb6f5c_division_by_zero_d81a153d.lean
 # RUN: not %cpp-verify --backend=lean --lean-project=%t/p --lean-certify %S/Inputs/lean_contract_certify.cpp -- 2>&1 | FileCheck %s --check-prefix=STUB
 
 # EXPORT: Trusted: sensor (contract assumed, not verified)

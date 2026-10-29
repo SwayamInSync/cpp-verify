@@ -22,7 +22,7 @@
 #
 # A failure that is gone takes its refutation with it, as does a module of
 # no failure.
-# RUN: sed -i 's/return x + 2;/return x + 1;/' %t/r.cpp
+# RUN: sed -i.orig 's/return x + 2;/return x + 1;/' %t/r.cpp
 # RUN: not %cpp-verify --lean-fallback=%t/p %t/r.cpp -- 2>&1 | FileCheck %s --check-prefix=FIXED
 # RUN: not test -e %t/p/CppVerify/Refutations/cppverify_add_one_fc20c3
 # RUN: not test -e %t/p/CppVerify/Refutations/cppverify_fake_000000

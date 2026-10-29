@@ -22,14 +22,14 @@
 # RUN: not test -e %t/p/.cppverify/automation
 #
 # An edited proof is the user's, kept as it is; it may use cppverify_auto.
-# RUN: sed -i 's/^  cppverify_auto_grind$/  cppverify_auto/' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_postcondition_506f384e.lean
+# RUN: sed -i.orig 's/^  cppverify_auto_grind$/  cppverify_auto/' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_postcondition_506f384e.lean
 # RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EDITED
 # RUN: grep -qx '  cppverify_auto' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_postcondition_506f384e.lean
 #
 # A stub that no revision of cppverify_auto tried, as before automation, and
 # one an earlier revision tried, are tried.
-# RUN: sed -i -e '/^   automation:/d' -e '/^import CppVerify.Goals\./d' -e '/^import CppVerify.Auto$/d' -e 's/^  cppverify_auto_grind$/  sorry/' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_missing_return_54ae7c80.lean
-# RUN: sed -i 's/cppverify_auto 3 did not prove it/cppverify_auto 2 did not prove it/' %t/p/CppVerify/Proofs/cppverify_square_934e38/cppverify_square_934e38_overflow_f86973f7.lean
+# RUN: sed -i.orig -e '/^   automation:/d' -e '/^import CppVerify.Goals\./d' -e '/^import CppVerify.Auto$/d' -e 's/^  cppverify_auto_grind$/  sorry/' %t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_missing_return_54ae7c80.lean
+# RUN: sed -i.orig 's/cppverify_auto 3 did not prove it/cppverify_auto 2 did not prove it/' %t/p/CppVerify/Proofs/cppverify_square_934e38/cppverify_square_934e38_overflow_f86973f7.lean
 # RUN: %cpp-verify --backend=lean --lean-project=%t/p %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EDITED
 # RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_missing_return_54ae7c80.lean --check-prefix=TRIED
 # RUN: FileCheck %s --input-file=%t/p/CppVerify/Proofs/cppverify_square_934e38/cppverify_square_934e38_overflow_f86973f7.lean --check-prefix=STUB
@@ -40,6 +40,11 @@
 # RUN: mkdir -p %t/u/CppVerify && cp %S/Inputs/lean_automation_user.lean %t/u/CppVerify/User.lean
 # RUN: %cpp-verify --backend=lean --lean-project=%t/u --lean-auto-timeout=3000 --jobs=2 %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 # RUN: FileCheck %s --input-file=%t/u/CppVerify/Proofs/cppverify_next_e1e917/cppverify_next_e1e917_overflow_fd7a6390.lean --check-prefix=HONEST
+#
+# A goal's time starts once Lean has loaded the project's modules, however
+# long that takes: here longer than the limit for one goal.
+# RUN: mkdir -p %t/load/CppVerify && cp %S/Inputs/lean_automation_slow_user.lean %t/load/CppVerify/User.lean
+# RUN: %cpp-verify --backend=lean --lean-project=%t/load --lean-auto-timeout=3000 --jobs=1 %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=EXPORT
 #
 # Without automation every new goal gets a stub.
 # RUN: %cpp-verify --backend=lean --no-lean-auto --lean-project=%t/q %S/Inputs/lean_automation.cpp -- 2>&1 | FileCheck %s --check-prefix=PLAIN --implicit-check-not=cppverify_auto
