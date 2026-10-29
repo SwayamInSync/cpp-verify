@@ -1973,8 +1973,7 @@ uninstrumented LLVM, Clang, and Z3. ``.github/workflows/cppverify-sanitize.sh
 BUILD`` runs every Verify test program through such a build and fails on any
 sanitizer report; CI does it every night. It turns off poisoning by hand
 (``allow_user_poisoning=0``), which LLVM's allocators do in the instrumented
-code's copies of their inline functions and not in the libraries, and gives
-threads 1 GiB stacks.
+code's copies of their inline functions and not in the libraries.
 
 New language features should have both semantic and structural oracles:
 
