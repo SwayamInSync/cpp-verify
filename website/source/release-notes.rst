@@ -1035,11 +1035,11 @@ valid claim or model of a false one in the sequence benchmark, as the
 verifier poses them, and no proof or certified failure of any Verify test
 program, with no function Verified by one and Failed by the other
 (``clang/utils/cppverify-z3-gate``). CI runs the gate every week for Z3's
-newest release. 0.2 keeps Z3 4.13.4: 5.3.2, the newest, gains a proof in the
+newest release. 0.2 keeps Z3 4.13.4: 5.3.3, the newest, gains a proof in the
 benchmark and loses none there, but on the test programs it loses two proofs
-(``even_mod``, ``count_reverse``) and a certified failure
-(``break_heap_wrong`` ends ``solver.timeout`` after 66 s instead of failing in
-2 s), as 4.16.0 and 5.1.0 did.
+(``even_mod`` and ``count_reverse`` end ``spec.fuel``), as 4.16.0, 5.1.0, and
+5.3.2 did, and it is slower where 4.13.4 refutes a function's complete query
+at once (``certified_failure_attribution.cpp`` takes 31 s instead of 2 s).
 
 **cvc5 and Lean on macOS.** macOS CI installed neither, so the 36 tests that
 need cvc5 or Lean and run outside Linux, the backend fidelity gate among them,
