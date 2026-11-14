@@ -268,3 +268,4 @@ Learn more
    :maxdepth: 1
 
    release-notes
+   migrating-to-0.2
