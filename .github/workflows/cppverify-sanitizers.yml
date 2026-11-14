@@ -3,9 +3,10 @@ name: CppVerify sanitizers
 # Every night, the verifier's own code (clang/lib/Verify and cpp-verify) is
 # built with AddressSanitizer and UndefinedBehaviorSanitizer
 # (-DCPPVERIFY_SANITIZER), beside an uninstrumented LLVM, Clang, and Z3, and
-# every Verify test program runs through it (cppverify-sanitize.sh). A
-# sanitizer report fails the job and uploads the outputs. A pull request that
-# changes this setup runs it too.
+# LLVM, Clang, the verifier, and Z3 together with ThreadSanitizer
+# (-DLLVM_USE_SANITIZER=Thread); every Verify test program runs through each
+# (cppverify-sanitize.sh). A sanitizer report fails the job and uploads the
+# outputs. A pull request that changes this setup runs it too.
 
 on:
   schedule:
@@ -15,6 +16,9 @@ on:
     paths:
       - .github/workflows/cppverify-sanitizers.yml
       - .github/workflows/cppverify-sanitize.sh
+      - .github/workflows/cppverify-tsan.supp
+      - clang/cmake/modules/CppVerifyZ3.cmake
+      - clang/tools/cpp-verify/ShadowStackGuard.cpp
   workflow_dispatch:
 
 permissions:
@@ -81,10 +85,86 @@ jobs:
       - name: Run every test program
         run: |
           build/bin/cpp-verify --version
-          .github/workflows/cppverify-sanitize.sh build
+          .github/workflows/cppverify-sanitize.sh build address
 
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: sanitizer-reports
+          path: sanitizer-reports/
+
+  tsan:
+    name: ThreadSanitizer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_COMPRESS: "1"
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools and cvc5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache clang-18 llvm-18 libclang-rt-18-dev
+          curl -sSfL -o "$RUNNER_TEMP/cvc5.zip" \
+            "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/cvc5-Linux-x86_64-static.zip"
+          unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
+          dirname "$(find "$RUNNER_TEMP/cvc5" -name cvc5 -type f)" >> "$GITHUB_PATH"
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-linux-tsan-${{ github.sha }}
+          restore-keys: ccache-linux-tsan-
+
+      # LLVM, Clang, the verifier, and the vendored Z3 are all instrumented:
+      # TSan sees the synchronization of instrumented code only. Clang would
+      # take the libstdc++ of the image's newest GCC, 14.2, whose timed mutex
+      # cannot wait on a steady clock under TSan (GCC PR 121496), as Z3's
+      # timer does; GCC 13's waits with pthread_mutex_clocklock, which TSan
+      # intercepts.
+      - name: Configure
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 \
+            -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13 \
+            -DLLVM_ENABLE_PROJECTS=clang \
+            -DLLVM_TARGETS_TO_BUILD=Native \
+            -DCPPVERIFY_VENDOR_Z3=ON \
+            -DCPPVERIFY_PREFER_SYSTEM_Z3=OFF \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_USE_SANITIZER=Thread \
+            -DLLVM_CCACHE_BUILD=ON
+
+      - name: Build
+        run: ninja -C build cpp-verify
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .ccache
+          key: ccache-linux-tsan-${{ github.sha }}
+
+      # Two programs at once, each with four jobs; llvm-symbolizer names the
+      # frames of a report.
+      - name: Run every test program
+        run: |
+          build/bin/cpp-verify --version
+          PATH=/usr/lib/llvm-18/bin:$PATH \
+            .github/workflows/cppverify-sanitize.sh build thread 2
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: tsan-reports
           path: sanitizer-reports/
