@@ -1561,9 +1561,11 @@ reported where it is, and costs its function alone:
   (``a case label inside another statement of its switch is unsupported``);
 - a local whose address is used, declared directly in a switch's body, which
   a later label enters without declaring it: declare it in a block after its
-  label, ``case 1: { int t; f(&t); break; }``;
-- ``[[assume(e)]]``, whose ``e`` false is undefined. Other statement
-  attributes (``[[likely]]``, ``[[fallthrough]]``) change nothing.
+  label, ``case 1: { int t; f(&t); break; }``.
+
+``[[assume(e)]]`` is proved, then assumed, in a switch as elsewhere (see
+`Assertions and calls that do not return`_). Other statement attributes
+(``[[likely]]``, ``[[fallthrough]]``) change nothing.
 
 Before 0.2, a ``switch`` stopped verification of its function with
 ``unsupported statement: SwitchStmt``, and ``break`` and ``continue`` in a
