@@ -21,7 +21,7 @@
 //
 // A readable form that says less than its goal does not build: here the
 // definition of b is replaced by the conclusion it should lead to.
-// RUN: sed -i 's/(h_b_1 : b_1 = __local_call_2_1)/(h_b_1 : b_1 = x_0 + (BitVec.ofInt 32 (2)))/' %t/p/CppVerify/Goals/cppverify_twice_edf933.lean
+// RUN: sed -i.orig 's/(h_b_1 : b_1 = __local_call_2_1)/(h_b_1 : b_1 = x_0 + (BitVec.ofInt 32 (2)))/' %t/p/CppVerify/Goals/cppverify_twice_edf933.lean
 // RUN: cd %t/p && not lake build CppVerify.Generated 2>&1 | FileCheck %s --check-prefix=BRIDGE
 
 int next(int x)

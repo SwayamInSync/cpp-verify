@@ -2483,8 +2483,9 @@ replay both drive it.
   proved each goal, then the axioms of its theorem or that the kernel
   rejected it (its messages, written by a thread of its own, are buffered and
   lost when it is stopped). A goal that takes longer than
-  `--lean-auto-timeout`, or stops Lean, is not proved, and the goals after it
-  start again in a new process. Each goal then gets the step that proved it
+  `--lean-auto-timeout`, counted from when Lean has loaded the project's
+  modules or finished the goal before, or stops Lean, is not proved, and the
+  goals after it start again in a new process. Each goal then gets the step that proved it
   (an automatic proof, pristine like a stub) or a stub whose header records
   the attempt. An export's `LeanAutomatic` counts its goals with automatic
   proofs. Without the toolchain nothing is tried.
