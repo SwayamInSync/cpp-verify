@@ -1,0 +1,14 @@
+// std::abs of integers as libc++ has declared it since LLVM 20: defined in
+// std::__math, and brought into std by a using-declaration.
+#pragma GCC system_header
+
+namespace std {
+inline namespace __1 {
+namespace __math {
+inline int abs(int __x) noexcept { return __builtin_abs(__x); }
+inline long abs(long __x) noexcept { return __builtin_labs(__x); }
+inline long long abs(long long __x) noexcept { return __builtin_llabs(__x); }
+} // namespace __math
+using __math::abs;
+} // namespace __1
+} // namespace std
