@@ -1065,6 +1065,13 @@ function without a verification contract: abs"). It is now its definition
 wherever the library declares it within ``std``. Testing the release archive
 on macOS 26 found this.
 
+**std::abs of long on Windows.** The Windows C runtime defines ``abs`` of
+``long`` and of ``long long`` with a ``const`` parameter (``inline long
+abs(long const)``), which the verifier did not take for the library's, so
+``std::abs(a - b)`` of two ``long`` values was ``construct.unsupported``
+there, with the same message. The parameter's qualifiers no longer matter.
+Running the Verify tests on Windows found this.
+
 **The Verify tests on Windows.** Windows CI built the verifier and verified
 one program. It now runs ``clang/test/Verify`` too. The first run passed 441
 of 522 tests and found one bug: see *Templates with contracts on Windows*
