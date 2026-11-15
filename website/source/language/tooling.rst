@@ -1279,8 +1279,9 @@ What an edit verifies again follows from the key:
    * - ``--timeout``, ``--jobs``, ``--time-report``
      - Nothing
 
-A record holds proofs only. A function with a failure, an unresolved
-verdict, or a warning is verified in every run. A proof function is
+A record holds proofs, with one exception below. A function with a
+failure, a warning, or a verdict unresolved for another reason than time is
+verified in every run. A proof function is
 recorded without the theorem its verification makes, which only the
 confirmation of a counterexample by proof uses: a run with one to confirm
 verifies the recorded proof functions after all. What each verdict
@@ -1288,6 +1289,28 @@ rests on is settled in every run from the records and the fresh verdicts
 together: a replayed proof that assumes the contract of a function that now
 fails is reported ``callee.contract``, exactly as if it had just been
 proved.
+
+A verdict ``Unresolved`` with ``solver.timeout`` costs every run its whole
+limit, so it is recorded too, with the limits it was reached under
+(``--timeout``, the limit for collections, ``--function-timeout``) and with
+where the function and everything it names is in the source, since the
+verdict names those places. A run reads it when none of its limits is
+larger and nothing has moved, and says so:
+
+.. code-block:: console
+
+   $ cpp-verify --timeout=1500 --proof-cache=.cppverify-cache loop.cpp
+   loop.cpp:8:3: Unresolved: matching_loop [backend=z3] [cache=0/2] [reason=solver.timeout] (proof obligation ...::assertion@8:3: timeout)
+   Summary: 2 verified, 1 unresolved (solver.timeout 1) in 3.1 s
+   $ cpp-verify --timeout=1500 --proof-cache=.cppverify-cache loop.cpp
+   loop.cpp:8:3: Unresolved: matching_loop [backend=z3] [cache=2/2] [reason=solver.timeout] (proof obligation ...::assertion@8:3: timeout)
+   note: this verdict is the proof cache's record of a run with --timeout=1500; a larger limit, or a change to the function, verifies it again
+   Summary: 2 verified, 1 unresolved (solver.timeout 1), 2 reused from the proof cache in 0.0 s
+
+A larger limit (or none) verifies again and replaces the record, and so
+does any edit that moves the function or what it names. A timeout depends
+on the machine and its load, so a recorded one may be a proof on a quieter
+day: raise the limit, or remove the cache directory, to try again.
 
 Runs that write something of each function do not use records: the dumps
 (``--dump-ir``, ``--dump-smt2`` is unaffected since nothing is solved),
