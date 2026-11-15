@@ -11,6 +11,7 @@
 #include "../Backend/ObligationSerialization.h"
 #include "../Backend/ObligationSimplify.h"
 #include "../Backend/ProofCache.h"
+#include "../IR/VHash.h"
 #include "../Backend/SpecAxioms.h"
 #include "../Backend/TaskGroup.h"
 #include "../Backend/Z3Encode.h"
@@ -3530,6 +3531,69 @@ public:
       InterfaceFunctions.push_back(std::move(Interface));
     }
 
+    inferBodySummaries(Functions);
+    inferBodySummaries(InterfaceFunctions);
+
+    // What the verification of one function may read of the others: a spec
+    // whole, and of any other function its contract, which is the function
+    // without its body and the bodies of its clause proofs. Each
+    // verification is given only the functions its own names, and those
+    // they name in turn, so its result depends on nothing else.
+    struct VisibleFunction {
+      const VFunction *Function = nullptr;
+      const VFunction *Interface = nullptr;
+      std::set<std::string> References;
+    };
+    std::vector<std::unique_ptr<VFunction>> Contracts;
+    std::map<std::string, VisibleFunction> Visible;
+    std::vector<std::set<std::string>> OwnReferences(Functions.size());
+    for (size_t I = 0; I != Functions.size(); ++I) {
+      const VFunction &Fn = *Functions[I];
+      const VFunction &Interface = *InterfaceFunctions[I];
+      OwnReferences[I] = digestVFunction(Fn).References;
+      OwnReferences[I].merge(digestVFunction(Interface).References);
+      VisibleFunction &Seen = Visible[Fn.Identity];
+      if (Fn.IsSpec) {
+        Seen.Function = &Fn;
+        Seen.Interface = &Interface;
+        Seen.References = OwnReferences[I];
+        continue;
+      }
+      for (const VFunction *Whole : {&Fn, &Interface}) {
+        auto Contract = std::make_unique<VFunction>(cloneVFunction(*Whole));
+        Contract->Body.clear();
+        for (VFunction::ClauseProof &Proof : Contract->ClauseProofs)
+          Proof.Body.clear();
+        Seen.References.merge(
+            digestVFunction(*Contract, VDigestScope::Interface).References);
+        (Whole == &Fn ? Seen.Function : Seen.Interface) = Contract.get();
+        Contracts.push_back(std::move(Contract));
+      }
+    }
+    struct FunctionScope {
+      FunctionMap Functions;
+      FunctionMap Interfaces;
+    };
+    auto scopeOf = [&](size_t Index) {
+      FunctionScope Scope;
+      const std::string &Self = Functions[Index]->Identity;
+      Scope.Functions[Self] = Functions[Index].get();
+      Scope.Interfaces[Self] = InterfaceFunctions[Index].get();
+      std::vector<std::string> Pending(OwnReferences[Index].begin(),
+                                       OwnReferences[Index].end());
+      while (!Pending.empty()) {
+        const std::string Identity = std::move(Pending.back());
+        Pending.pop_back();
+        auto Seen = Visible.find(Identity);
+        if (Seen == Visible.end() || Scope.Functions.count(Identity))
+          continue;
+        Scope.Functions[Identity] = Seen->second.Function;
+        Scope.Interfaces[Identity] = Seen->second.Interface;
+        llvm::append_range(Pending, Seen->second.References);
+      }
+      return Scope;
+    };
+
     std::vector<LeanProjectGoal> LeanProjectGoals;
     // The goal groups of the modules a fallback run gave its solver, which
     // it examines in Lean only when the solver leaves them unresolved.
@@ -3756,7 +3820,13 @@ public:
       uint64_t Confirmed = 0;
     };
     std::vector<FunctionRun> Runs(Functions.size());
-    auto verifyFunction = [&](size_t Index) {
+    auto verifyFunction = [&, &AllFunctions = FnMap,
+                           &AllInterfaces = InterfaceMap](size_t Index) {
+      (void)AllFunctions;
+      (void)AllInterfaces;
+      const FunctionScope Scope = scopeOf(Index);
+      const FunctionMap &FnMap = Scope.Functions;
+      const FunctionMap &InterfaceMap = Scope.Interfaces;
       FunctionRun &Run = Runs[Index];
       std::vector<VerifyDiagnostic> &Diags = Run.Diags;
       bool &AllOk = Run.AllOk;
