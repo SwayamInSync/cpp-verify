@@ -7934,6 +7934,7 @@ llvm::json::Object verify::summaryRecord(const VerifySummary &Summary) {
   Record["lowered"] = Summary.Lowered;
   Record["exported"] = Summary.Exported;
   Record["interrupted"] = Summary.Interrupted;
+  Record["reused"] = Summary.Reused;
   return Record;
 }
 
