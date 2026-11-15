@@ -1,5 +1,6 @@
 //===--- DumpIR.cpp -------------------------------------------------------===//
 #include "DumpIR.h"
+#include "../IR/VHash.h"
 #include "../Backend/ObligationLowering.h"
 #include "../Backend/ObligationSerialization.h"
 #include "llvm/ADT/STLExtras.h"
@@ -387,6 +388,7 @@ static std::string leafTypeToken(const VType &Ty) {
 
 void verify::dumpVFunction(const VFunction &Fn, llvm::raw_ostream &OS) {
   ind(OS, 0) << "fn " << Fn.Name << "\n";
+  ind(OS, 1) << "digest sha256:" << digestVFunction(Fn).Hash << "\n";
   if (Fn.IntMode == VIntMode::Math)
     ind(OS, 1) << "int math\n";
   for (const auto &P : Fn.Params)
