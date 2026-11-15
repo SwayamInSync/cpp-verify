@@ -206,3 +206,11 @@ jobs:
       - name: Verify a program
         shell: bash
         run: ./.github/workflows/cppverify-smoke.sh build/bin
+
+      # lit takes grep, sed, and the other tools its RUN lines use from Git
+      # for Windows.
+      - name: Test the verifier
+        shell: pwsh
+        run: |
+          ninja -C build FileCheck not count split-file llvm-config
+          python build\bin\llvm-lit.py -sv --no-progress-bar clang\test\Verify
