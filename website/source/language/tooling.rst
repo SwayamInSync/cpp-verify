@@ -930,6 +930,10 @@ host, or the one named after ``--`` (``--target=...``). Widths, alignments,
 layouts, and the range of an enumeration are the target's, so a verdict for
 one target is not a verdict for another. On Windows ``long`` has 32 bits:
 
+.. The verdicts are a target's, not the host's;
+   clang/test/Verify/suite/windows_target.cpp checks this example.
+.. cppverify-example: fragment
+
 .. code-block:: cpp
 
    long sum(int a, int b)
