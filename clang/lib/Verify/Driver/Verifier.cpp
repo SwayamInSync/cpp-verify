@@ -12,6 +12,7 @@
 #include "../Backend/ObligationSimplify.h"
 #include "../Backend/ProofCache.h"
 #include "../IR/VHash.h"
+#include "llvm/Support/Endian.h"
 #include "../Backend/SpecAxioms.h"
 #include "../Backend/TaskGroup.h"
 #include "../Backend/Z3Encode.h"
@@ -1270,6 +1271,19 @@ static std::string lowerFailure(BackendKind Kind) {
              : "backend lowering failed: ";
 }
 
+/// How many of a verdict's queries the proof cache answered, of how many.
+static std::string cacheSuffix(const VerifyResult &Result) {
+  if (!Result.CacheHits && !Result.CacheMisses && !Result.CacheErrors)
+    return {};
+  std::string Suffix =
+      " [cache=" + std::to_string(Result.CacheHits) + "/" +
+      std::to_string(Result.CacheHits + Result.CacheMisses +
+                     Result.CacheErrors);
+  if (Result.CacheErrors)
+    Suffix += ", errors=" + std::to_string(Result.CacheErrors);
+  return Suffix + "]";
+}
+
 static std::string backendSuffix(const VerifyResult &Result) {
   std::string Suffix;
   if (!Result.BackendName.empty()) {
@@ -1278,14 +1292,7 @@ static std::string backendSuffix(const VerifyResult &Result) {
       Suffix += ", bound=" + std::to_string(*Result.Bound);
     Suffix += "]";
   }
-  if (Result.CacheHits || Result.CacheMisses || Result.CacheErrors) {
-    Suffix += " [cache=" + std::to_string(Result.CacheHits) + "/" +
-              std::to_string(Result.CacheHits + Result.CacheMisses +
-                             Result.CacheErrors);
-    if (Result.CacheErrors)
-      Suffix += ", errors=" + std::to_string(Result.CacheErrors);
-    Suffix += "]";
-  }
+  Suffix += cacheSuffix(Result);
   if (!Result.CacheError.empty())
     Suffix += " [cache-error=" + Result.CacheError + "]";
   if (Result.Reason != VerifyReason::None)
@@ -2940,6 +2947,120 @@ public:
   }
 };
 
+/// What a function's verification established, written for the proof cache.
+struct RecordWriter {
+  std::string Out;
+  void number(uint64_t Value) {
+    char Bytes[8];
+    llvm::support::endian::write64le(Bytes, Value);
+    Out.append(Bytes, 8);
+  }
+  void text(llvm::StringRef Value) {
+    number(Value.size());
+    Out += Value;
+  }
+  template <typename Range> void texts(const Range &Values) {
+    number(Values.size());
+    for (const std::string &Value : Values)
+      text(Value);
+  }
+};
+
+/// Reads what RecordWriter wrote. Ok is false after anything else.
+struct RecordReader {
+  llvm::StringRef In;
+  bool Ok = true;
+  uint64_t number() {
+    if (In.size() < 8) {
+      Ok = false;
+      return 0;
+    }
+    const uint64_t Value = llvm::support::endian::read64le(In.data());
+    In = In.drop_front(8);
+    return Value;
+  }
+  /// The length of a list, each of whose members takes eight bytes or more.
+  size_t count() {
+    const uint64_t Count = number();
+    if (Count > In.size() / 8)
+      Ok = false;
+    return Ok ? Count : 0;
+  }
+  bool flag() {
+    const uint64_t Value = number();
+    if (Value > 1)
+      Ok = false;
+    return Value == 1;
+  }
+  std::string text() {
+    const uint64_t Size = number();
+    if (!Ok || Size > In.size()) {
+      Ok = false;
+      return {};
+    }
+    std::string Value = In.take_front(Size).str();
+    In = In.drop_front(Size);
+    return Value;
+  }
+  std::vector<std::string> list() {
+    std::vector<std::string> Values;
+    for (size_t I = 0, E = count(); I != E && Ok; ++I)
+      Values.push_back(text());
+    return Values;
+  }
+  std::set<std::string> set() {
+    std::set<std::string> Values;
+    for (size_t I = 0, E = count(); I != E && Ok; ++I)
+      Values.insert(text());
+    return Values;
+  }
+};
+
+/// Bumped whenever what a record holds, or how a key is made, changes.
+constexpr unsigned ResultRecordVersion = 1;
+
+/// The options a function's verdicts depend on, as part of the key of its
+/// record; nothing for a run whose verifications are not recorded. A proof
+/// holds under any limit of time or memory, so those are not in it.
+std::optional<std::string> resultCacheManifest(const VerifyOptions &Opts) {
+  // Every option, in the order of its declaration: one added to
+  // VerifyOptions does not compile here until it is placed.
+  const auto &[DumpIRLayers, LowerOnly, Backend, LeanOutPath, LeanProjectPath,
+               LeanFallbackProjectPath, LeanScope, LeanCertify, LeanPruneStale,
+               LeanAuto, LeanAutoTimeoutMs, LeanJobs, BMCUnroll,
+               SolverTimeoutMs, CollectionTimeoutMs, FunctionTimeoutMs,
+               CertifyTimeoutMs, SolverResourceLimit, Jobs, MaxQueryNodes,
+               MemoryLimitMB, IntegerEncoding, CVC5Path, ProofCachePath,
+               ProofCacheMaxBytes, ProofCacheMaxEntries, CheckUB,
+               ProfileQuantifiers, Diagnostics, ObligationOut, Quiet, Verbose,
+               ListFunctions, TimeReport, Progress, MaxFailures,
+               FunctionPatterns, ConfirmBound, Summary, Parts, CrossFile,
+               ContractsOut, ReportPath, QuietWithoutFunctions] = Opts;
+  if (ProofCachePath.empty() || Backend != BackendKind::Z3 || DumpIRLayers ||
+      LowerOnly || ObligationOut || ProfileQuantifiers || CrossFile ||
+      LeanCertify || !LeanOutPath.empty() || !LeanProjectPath.empty() ||
+      !LeanFallbackProjectPath.empty())
+    return std::nullopt;
+  RecordWriter W;
+  W.number(ResultRecordVersion);
+  W.number(VFunctionDigestVersion);
+  W.text(buildIdentity());
+  W.number(BMCUnroll);
+  W.number(SolverResourceLimit);
+  W.number(MaxQueryNodes);
+  W.number(static_cast<uint64_t>(IntegerEncoding));
+  W.number(CheckUB);
+  W.number(static_cast<uint64_t>(Diagnostics));
+  W.number(Quiet);
+  W.number(Verbose);
+  W.number(ListFunctions);
+  W.number(TimeReport);
+  W.number(MaxFailures);
+  W.number(ConfirmBound);
+  W.number(QuietWithoutFunctions);
+  return std::move(W.Out);
+}
+
 class Verifier {
   ASTContext &Ctx;
   VerifyOptions Opts;
@@ -3543,20 +3664,27 @@ public:
       const VFunction *Function = nullptr;
       const VFunction *Interface = nullptr;
       std::set<std::string> References;
+      /// The digests of both.
+      std::string Hash;
     };
     std::vector<std::unique_ptr<VFunction>> Contracts;
     std::map<std::string, VisibleFunction> Visible;
     std::vector<std::set<std::string>> OwnReferences(Functions.size());
+    std::vector<std::string> OwnHash(Functions.size());
     for (size_t I = 0; I != Functions.size(); ++I) {
       const VFunction &Fn = *Functions[I];
       const VFunction &Interface = *InterfaceFunctions[I];
-      OwnReferences[I] = digestVFunction(Fn).References;
-      OwnReferences[I].merge(digestVFunction(Interface).References);
+      for (const VFunction *Whole : {&Fn, &Interface}) {
+        VFunctionDigest Digest = digestVFunction(*Whole);
+        OwnReferences[I].merge(Digest.References);
+        OwnHash[I] += Digest.Hash;
+      }
       VisibleFunction &Seen = Visible[Fn.Identity];
       if (Fn.IsSpec) {
         Seen.Function = &Fn;
         Seen.Interface = &Interface;
         Seen.References = OwnReferences[I];
+        Seen.Hash = OwnHash[I];
         continue;
       }
       for (const VFunction *Whole : {&Fn, &Interface}) {
@@ -3564,8 +3692,10 @@ public:
         Contract->Body.clear();
         for (VFunction::ClauseProof &Proof : Contract->ClauseProofs)
           Proof.Body.clear();
-        Seen.References.merge(
-            digestVFunction(*Contract, VDigestScope::Interface).References);
+        VFunctionDigest Digest =
+            digestVFunction(*Contract, VDigestScope::Interface);
+        Seen.References.merge(Digest.References);
+        Seen.Hash += Digest.Hash;
         (Whole == &Fn ? Seen.Function : Seen.Interface) = Contract.get();
         Contracts.push_back(std::move(Contract));
       }
@@ -3573,6 +3703,8 @@ public:
     struct FunctionScope {
       FunctionMap Functions;
       FunctionMap Interfaces;
+      /// Identities named that no function has.
+      std::set<std::string> Absent;
     };
     auto scopeOf = [&](size_t Index) {
       FunctionScope Scope;
@@ -3585,7 +3717,11 @@ public:
         const std::string Identity = std::move(Pending.back());
         Pending.pop_back();
         auto Seen = Visible.find(Identity);
-        if (Seen == Visible.end() || Scope.Functions.count(Identity))
+        if (Seen == Visible.end()) {
+          Scope.Absent.insert(Identity);
+          continue;
+        }
+        if (Scope.Functions.count(Identity))
           continue;
         Scope.Functions[Identity] = Seen->second.Function;
         Scope.Interfaces[Identity] = Seen->second.Interface;
@@ -3818,8 +3954,278 @@ public:
       uint64_t Task = 0;
       uint64_t Notes = 0;
       uint64_t Confirmed = 0;
+      /// Read from the proof cache, not verified by this run.
+      bool Reused = false;
     };
     std::vector<FunctionRun> Runs(Functions.size());
+
+    // A function all of whose verdicts are proofs is recorded in the proof
+    // cache under a key of everything its verification read, and a later
+    // run that makes the same key takes the record instead of verifying.
+    // What each verdict rests on is settled afresh either way, so a
+    // recorded proof is demoted like any other when a contract it assumes
+    // is no longer established.
+    const std::optional<std::string> ResultManifest = resultCacheManifest(Opts);
+    std::unique_ptr<ProofCache> Results;
+    if (ResultManifest)
+      Results = std::make_unique<ProofCache>(
+          Opts.ProofCachePath, "cppverify-function-results",
+          Opts.ProofCacheMaxBytes, Opts.ProofCacheMaxEntries);
+    auto resultKey = [&](size_t Index) {
+      const FunctionScope Scope = scopeOf(Index);
+      const std::string &Self = Functions[Index]->Identity;
+      RecordWriter Key;
+      Key.text(*ResultManifest);
+      Key.text(OwnHash[Index]);
+      auto Error = InterfaceErrors.find(Self);
+      Key.number(Error != InterfaceErrors.end());
+      if (Error != InterfaceErrors.end())
+        Key.text(Error->second);
+      Key.number(Scope.Functions.size());
+      for (const auto &[Identity, Function] : Scope.Functions) {
+        Key.text(Identity);
+        Key.text(Identity == Self ? std::string() : Visible.at(Identity).Hash);
+      }
+      Key.texts(Scope.Absent);
+      return llvm::toHex(
+          llvm::SHA256::hash(llvm::arrayRefFromStringRef(Key.Out)),
+          /*LowerCase=*/true);
+    };
+    // A record holds only what a proof's diagnostics carry. Anything else
+    // in a run (a failure, a warning, a place in the source, a confirmation
+    // still to make) leaves the run unrecorded, and the function verified
+    // again next time.
+    auto recordOf = [](const FunctionRun &Run) -> std::optional<std::string> {
+      const auto &[Diags, AllOk, AnyFailed, FailedCallers, UndefinedSpecs,
+                   CallDependencies, UnframedSpecs, UnprovenPosts,
+                   ProofDependencies, InductiveLines, Confirmations,
+                   Refutations, Contract, ContractCheck, Dump, Archive,
+                   Interrupted, Times, Task, Notes, Confirmed, Reused] = Run;
+      if (!AllOk || AnyFailed || !Confirmations.empty() ||
+          !Refutations.empty() || Contract || !Dump.empty() ||
+          !Archive.empty() || Interrupted || Reused)
+        return std::nullopt;
+      RecordWriter W;
+      W.number(Diags.size());
+      for (const VerifyDiagnostic &D : Diags) {
+        const auto &[K, Message, Loc, FunctionName, Result, LeanAutomatic,
+                     LeanRefuted, Vacuous, FindingOf, FoundAtEntry,
+                     VacuousAtEntry, Partial, Trusts, ConfirmedWith,
+                     UnverifiedCallers, Quiet, Hidden, Span, FunctionLoc,
+                     Axiom, DiagNotes, Related, Additional, UnlessDefined] = D;
+        if (!(D.isProof() || K == VerifyDiagnostic::Trusted) ||
+            Loc.isValid() || Span.isValid() || FunctionLoc.isValid() ||
+            LeanAutomatic || LeanRefuted || FindingOf || FoundAtEntry ||
+            !ConfirmedWith.empty() || !UnverifiedCallers.empty() ||
+            !Related.empty() || Additional || !UnlessDefined.empty())
+          return std::nullopt;
+        // A record answers every query its verdict made, and its message
+        // says so.
+        std::string Recorded = Message;
+        if (Result) {
+          VerifyResult Answered;
+          Answered.CacheHits = Result->CacheHits + Result->CacheMisses;
+          const std::string Then = cacheSuffix(*Result);
+          const size_t At = Then.empty() ? 0 : Recorded.find(Then);
+          if (At == std::string::npos)
+            return std::nullopt;
+          Recorded.replace(At, Then.size(), cacheSuffix(Answered));
+        }
+        W.number(K);
+        W.text(Recorded);
+        W.text(FunctionName);
+        W.number(Vacuous);
+        W.number(VacuousAtEntry);
+        W.number(Partial);
+        W.texts(Trusts);
+        W.number(Quiet);
+        W.number(Hidden);
+        W.number(Axiom);
+        W.texts(DiagNotes);
+        W.number(Result.has_value());
+        if (!Result)
+          continue;
+        const auto &[Status, Reason, BackendName, Bound, ResultMessage, Model,
+                     Trace, MoreFailures, ObligationId, ObligationType,
+                     Assignment, Location, BeginLocation, EndLocation, Source,
+                     CacheHits, CacheMisses, CacheErrors, CacheError,
+                     ReusedQueries, ExploredBounds, UnprovedObligations,
+                     Evidence, LeanGoals, CertifiedWith, InductionOnly,
+                     QuantifierProfile, InductionTried, InductionUsed,
+                     Unchecked, UncheckedApplication, UncheckedReason,
+                     ConfirmedWithContracts] = *Result;
+        if (!Model.empty() || !Trace.empty() || !MoreFailures.empty() ||
+            !ObligationId.empty() || ObligationType || Assignment ||
+            Location.isValid() || BeginLocation.isValid() ||
+            EndLocation.isValid() || Source.isValid() || CacheErrors ||
+            !CacheError.empty() || UnprovedObligations || !LeanGoals.empty() ||
+            !QuantifierProfile.empty() || !Unchecked.empty() ||
+            !UncheckedApplication.empty() || !UncheckedReason.empty() ||
+            !ConfirmedWithContracts.empty())
+          return std::nullopt;
+        W.number(static_cast<uint64_t>(Status));
+        W.number(static_cast<uint64_t>(Reason));
+        W.number(CacheHits + CacheMisses);
+        W.text(BackendName);
+        W.number(Bound.has_value());
+        W.number(Bound.value_or(0));
+        W.text(ResultMessage);
+        W.number(ExploredBounds.size());
+        for (unsigned Explored : ExploredBounds)
+          W.number(Explored);
+        W.number(Evidence.has_value());
+        if (Evidence) {
+          const auto &[Solver, Total, SolverProved, LeanObligations] =
+              *Evidence;
+          if (!LeanObligations.empty())
+            return std::nullopt;
+          W.text(Solver);
+          W.number(Total);
+          W.number(SolverProved.has_value());
+          W.number(SolverProved.value_or(0));
+        }
+        W.texts(CertifiedWith);
+        W.number(InductionOnly);
+        W.texts(InductionTried);
+        W.text(InductionUsed);
+      }
+      W.texts(FailedCallers);
+      W.texts(UndefinedSpecs);
+      W.number(CallDependencies.size());
+      for (const auto &[Index, Identity, Callees] : CallDependencies) {
+        W.number(Index);
+        W.text(Identity);
+        W.texts(Callees);
+      }
+      W.texts(UnframedSpecs);
+      W.texts(UnprovenPosts);
+      W.number(ProofDependencies.size());
+      for (const SpecReliance &Reliance : ProofDependencies) {
+        const auto &[Index, Specs, Withheld, Establishes, Facts, PostsWithheld,
+                     Callees, AssumedPosts, AssumedUnfoldings, InductivePosts] =
+            Reliance;
+        W.number(Index);
+        W.texts(Specs);
+        W.texts(Withheld);
+        W.text(Establishes);
+        W.number(Facts);
+        W.texts(PostsWithheld);
+        W.texts(Callees);
+        W.texts(AssumedPosts);
+        W.texts(AssumedUnfoldings);
+        W.texts(InductivePosts);
+      }
+      W.number(InductiveLines.size());
+      for (const auto &[Index, Identity] : InductiveLines) {
+        W.number(Index);
+        W.text(Identity);
+      }
+      W.number(ContractCheck.has_value());
+      W.number(ContractCheck.value_or(0));
+      return std::move(W.Out);
+    };
+    auto runOf = [](llvm::StringRef Record) -> std::optional<FunctionRun> {
+      RecordReader R{Record};
+      FunctionRun Run;
+      Run.Reused = true;
+      Run.Times = std::make_shared<BackendTimes>();
+      for (size_t I = 0, E = R.count(); I != E && R.Ok; ++I) {
+        VerifyDiagnostic D;
+        const uint64_t K = R.number();
+        if (K > VerifyDiagnostic::Warning)
+          return std::nullopt;
+        D.K = static_cast<VerifyDiagnostic::Kind>(K);
+        D.Message = R.text();
+        D.FunctionName = R.text();
+        D.Vacuous = R.flag();
+        D.VacuousAtEntry = R.flag();
+        D.Partial = R.flag();
+        D.Trusts = R.list();
+        D.Quiet = R.flag();
+        D.Hidden = R.flag();
+        D.Axiom = R.flag();
+        D.Notes = R.list();
+        if (R.flag()) {
+          VerifyResult Result;
+          const uint64_t Status = R.number();
+          const uint64_t Reason = R.number();
+          if (Status > static_cast<uint64_t>(VerifyStatus::MixedProof) ||
+              Reason != static_cast<uint64_t>(VerifyReason::None))
+            return std::nullopt;
+          Result.Status = static_cast<VerifyStatus>(Status);
+          Result.CacheHits = R.number();
+          Result.BackendName = R.text();
+          const bool Bounded = R.flag();
+          const uint64_t Bound = R.number();
+          if (Bounded)
+            Result.Bound = Bound;
+          Result.Message = R.text();
+          for (size_t B = 0, BE = R.count(); B != BE && R.Ok; ++B)
+            Result.ExploredBounds.push_back(R.number());
+          if (R.flag()) {
+            ProofEvidence Evidence;
+            Evidence.Solver = R.text();
+            Evidence.Total = R.number();
+            const bool Proved = R.flag();
+            const uint64_t SolverProved = R.number();
+            if (Proved)
+              Evidence.SolverProved = SolverProved;
+            Result.Evidence = std::move(Evidence);
+          }
+          Result.CertifiedWith = R.set();
+          Result.InductionOnly = R.flag();
+          Result.InductionTried = R.list();
+          Result.InductionUsed = R.text();
+          D.Result = std::move(Result);
+        }
+        if (!(D.isProof() || D.K == VerifyDiagnostic::Trusted))
+          return std::nullopt;
+        Run.Diags.push_back(std::move(D));
+      }
+      Run.FailedCallers = R.set();
+      Run.UndefinedSpecs = R.set();
+      for (size_t I = 0, E = R.count(); I != E && R.Ok; ++I) {
+        const uint64_t Index = R.number();
+        std::string Identity = R.text();
+        Run.CallDependencies.emplace_back(Index, std::move(Identity), R.set());
+      }
+      Run.UnframedSpecs = R.set();
+      Run.UnprovenPosts = R.set();
+      for (size_t I = 0, E = R.count(); I != E && R.Ok; ++I) {
+        SpecReliance Reliance;
+        Reliance.Index = R.number();
+        Reliance.Specs = R.set();
+        Reliance.Withheld = R.set();
+        Reliance.Establishes = R.text();
+        Reliance.Facts = R.number();
+        Reliance.PostsWithheld = R.set();
+        Reliance.Callees = R.set();
+        Reliance.AssumedPosts = R.set();
+        Reliance.AssumedUnfoldings = R.set();
+        Reliance.InductivePosts = R.set();
+        Run.ProofDependencies.push_back(std::move(Reliance));
+      }
+      for (size_t I = 0, E = R.count(); I != E && R.Ok; ++I) {
+        const uint64_t Index = R.number();
+        Run.InductiveLines.emplace_back(Index, R.text());
+      }
+      const bool Checked = R.flag();
+      const uint64_t ContractCheck = R.number();
+      if (Checked)
+        Run.ContractCheck = ContractCheck;
+      // Every place in Diags a record names is one of its diagnostics.
+      const size_t Count = Run.Diags.size();
+      for (const auto &[Index, Identity, Callees] : Run.CallDependencies)
+        R.Ok &= Index < Count;
+      for (const SpecReliance &Reliance : Run.ProofDependencies)
+        R.Ok &= Reliance.Index < Count;
+      for (const auto &[Index, Identity] : Run.InductiveLines)
+        R.Ok &= Index < Count;
+      R.Ok &= !Run.ContractCheck || *Run.ContractCheck < Count;
+      if (!R.Ok || !R.In.empty())
+        return std::nullopt;
+      return Run;
+    };
     auto verifyFunction = [&, &AllFunctions = FnMap,
                            &AllInterfaces = InterfaceMap](size_t Index) {
       (void)AllFunctions;
@@ -5488,7 +5894,21 @@ public:
     size_t Queued = Batch.size();
     auto runFunction = [&](size_t I) {
       const auto Start = std::chrono::steady_clock::now();
-      verifyFunction(I);
+      std::string Key;
+      if (Results) {
+        Key = resultKey(I);
+        ProofCacheRecord Record = Results->lookupRecord(Key);
+        if (Record.Kind == ProofCacheLookupKind::Hit)
+          if (std::optional<FunctionRun> Recorded = runOf(Record.Payload))
+            Runs[I] = std::move(*Recorded);
+      }
+      if (!Runs[I].Reused) {
+        verifyFunction(I);
+        // A record that cannot be written costs only the next run's time.
+        if (Results)
+          if (std::optional<std::string> Record = recordOf(Runs[I]))
+            llvm::consumeError(Results->storeRecord(Key, *Record));
+      }
       Runs[I].Task = nanosecondsSince(Start);
       if (!ShowProgress)
         return;
