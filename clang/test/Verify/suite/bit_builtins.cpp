@@ -1,8 +1,8 @@
-// RUN: not %cpp-verify --jobs=1 %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK,BITS
+// RUN: not %cpp-verify --jobs=1 %s -- %linux_target 2>&1 | FileCheck %s --check-prefixes=CHECK,BITS
 // RUN: not %cpp-verify --jobs=1 --int-encoding=integer --function=l* \
 // RUN:   --function=t* --function=c* --function=p* --function=f* --function=v* \
-// RUN:   --function=spec_zero --function=asserts %s -- 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --jobs=1 --function=lz_zero --diagnostics-format=json %s -- 2>/dev/null | FileCheck %s --check-prefix=JSON
+// RUN:   --function=spec_zero --function=asserts %s -- %linux_target 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --jobs=1 --function=lz_zero --diagnostics-format=json %s -- %linux_target 2>/dev/null | FileCheck %s --check-prefix=JSON
 //
 // GCC's bit-counting and byte-swapping builtins are their exact definitions
 // over the operand's bits. __builtin_clz and __builtin_ctz of 0 are
