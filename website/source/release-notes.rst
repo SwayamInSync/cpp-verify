@@ -1043,6 +1043,11 @@ need cvc5 or Lean and run outside Linux, the backend fidelity gate among them,
 ran only on Linux. They now run on macOS too, with cvc5 1.4.2 and the pinned
 Lean.
 
+**macOS 15 in CI.** GitHub retired its macOS 14 runners on 2026-11-02. macOS
+CI and the nightly stability run now use macOS 15; a release is built on
+macOS 15, still for macOS 13 and later, and its archive is tested on
+macOS 26.
+
 **Sanitizers every night.** The verifier's own code is now built with
 AddressSanitizer and UndefinedBehaviorSanitizer (``-DCPPVERIFY_SANITIZER``),
 and every Verify test program runs through that build every night; a report
