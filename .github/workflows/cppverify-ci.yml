@@ -5,8 +5,8 @@ name: CppVerify CI
 # the release supports; the Clang build also checks the verifier with
 # clang-tidy.
 # macOS and Windows build a fresh clone the way setup.sh and setup.ps1 do for
-# a user, then verify a program with the result; macOS then runs the Verify
-# tests, with the newest cvc5 and the pinned Lean.
+# a user, then verify a program with the result and run the Verify tests:
+# macOS with the newest cvc5 and the pinned Lean, Windows with Z3 alone.
 
 on:
   # The book, the language reference, the website scripts, and DESIGN.md are
