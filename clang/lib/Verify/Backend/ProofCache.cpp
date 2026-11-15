@@ -104,7 +104,8 @@ ProofCacheRecord ProofCache::readEntry(llvm::StringRef Header) const {
 }
 
 llvm::Error ProofCache::installEntry(llvm::StringRef Header,
-                                     llvm::StringRef Body) const {
+                                     llvm::StringRef Body,
+                                     bool Replace) const {
   if (!enabled())
     return llvm::Error::success();
   if (!InitializationError.empty())
@@ -116,10 +117,13 @@ llvm::Error ProofCache::installEntry(llvm::StringRef Header,
   // An entry is immutable: the first one installed for a header stays.
   if (llvm::sys::fs::exists(Path)) {
     ProofCacheRecord Existing = readEntry(Header);
-    if (Existing.Kind == ProofCacheLookupKind::Hit)
+    if (Existing.Kind == ProofCacheLookupKind::Hit &&
+        !(Replace && Existing.Payload != Body))
       return llvm::Error::success();
-    if (Existing.Kind == ProofCacheLookupKind::Corrupt ||
-        Existing.Kind == ProofCacheLookupKind::IOFailure)
+    if (Replace)
+      llvm::sys::fs::remove(Path);
+    else if (Existing.Kind == ProofCacheLookupKind::Corrupt ||
+             Existing.Kind == ProofCacheLookupKind::IOFailure)
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      Existing.Message.c_str());
   }
@@ -194,9 +198,12 @@ ProofCacheRecord ProofCache::lookupRecord(llvm::StringRef Key) const {
 
 llvm::Error ProofCache::storeRecord(llvm::StringRef Key,
                                     llvm::StringRef Payload) const {
+  // A record that does not read back as written is replaced: nothing else
+  // would ever repair it.
   return installEntry(recordHeader(Key),
                       "payload-sha256=" + digest(Payload) + "\n" +
-                          Payload.str());
+                          Payload.str(),
+                      /*Replace=*/true);
 }
 
 llvm::Error ProofCache::pruneImpl(uint64_t ReserveBytes,
