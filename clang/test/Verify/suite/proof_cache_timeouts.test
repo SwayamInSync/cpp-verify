@@ -23,6 +23,7 @@
 # RUN: not %cpp-verify --jobs=1 --timeout=1500 --diagnostics-format=json --proof-cache=%t/json %t/base.cpp -- > %t/json.warm 2>/dev/null
 # RUN: FileCheck %s --check-prefix=JSON < %t/json.warm
 # JSON: "function":"matching_loop"{{.*}}"reason":"solver.timeout"{{.*}}"source":{"column":3,{{.*}}"line":8}{{.*}}"status":"unresolved"
+# JSON: "reused":2,"schema":"cppverify.summary/1"
 
 # A larger limit verifies again, and its verdict replaces the record.
 # RUN: not %cpp-verify --jobs=1 --timeout=2500 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=LARGER
