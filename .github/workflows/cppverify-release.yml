@@ -38,7 +38,7 @@ jobs:
           - platform: linux-x86_64
             runner: ubuntu-22.04
           - platform: macos-arm64
-            runner: macos-14
+            runner: macos-15
     steps:
       - name: Free disk space
         if: runner.os == 'Linux'
@@ -137,7 +137,7 @@ jobs:
           - platform: linux-x86_64
             runner: ubuntu-24.04
           - platform: macos-arm64
-            runner: macos-15
+            runner: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
