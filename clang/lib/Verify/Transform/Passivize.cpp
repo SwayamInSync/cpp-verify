@@ -1658,7 +1658,7 @@ keepsNoAddress(const VFunction &Fn, const std::string &Param, bool AllowExtent,
 }
 
 static bool pointerResultComesFrom(const VExpr *E,
-                                   const std::set<std::string> &Params) {
+                                   std::set<std::string> &Sources) {
   if (!E)
     return false;
   while (E && E->K == VExpr::Cast)
@@ -1667,42 +1667,44 @@ static bool pointerResultComesFrom(const VExpr *E,
     const auto *L = static_cast<const VLiteralExpr *>(E);
     return E->Ty.Kind == VTypeKind::Ptr && L->Value == "0";
   }
-  if (E->K == VExpr::Var)
-    return Params.count(static_cast<const VVarExpr *>(E)->Name) != 0;
+  if (E->K == VExpr::Var) {
+    Sources.insert(static_cast<const VVarExpr *>(E)->Name);
+    return true;
+  }
   if (E->K == VExpr::Conditional) {
     const auto *C = static_cast<const VConditionalExpr *>(E);
-    return pointerResultComesFrom(C->Then.get(), Params) &&
-           pointerResultComesFrom(C->Else.get(), Params);
+    return pointerResultComesFrom(C->Then.get(), Sources) &&
+           pointerResultComesFrom(C->Else.get(), Sources);
   }
   return false;
 }
 
 static bool pointerReturnsComeFrom(const VStmt &S,
-                                   const std::set<std::string> &Params) {
+                                   std::set<std::string> &Sources) {
   switch (S.K) {
   case VStmt::Return: {
     const auto &R = static_cast<const VReturnStmt &>(S);
     return !R.Value || R.Value->Ty.Kind != VTypeKind::Ptr ||
-           pointerResultComesFrom(R.Value.get(), Params);
+           pointerResultComesFrom(R.Value.get(), Sources);
   }
   case VStmt::If: {
     const auto &I = static_cast<const VIfStmt &>(S);
     for (const auto &Nested : I.Then)
-      if (!pointerReturnsComeFrom(*Nested, Params))
+      if (!pointerReturnsComeFrom(*Nested, Sources))
         return false;
     for (const auto &Nested : I.Else)
-      if (!pointerReturnsComeFrom(*Nested, Params))
+      if (!pointerReturnsComeFrom(*Nested, Sources))
         return false;
     return true;
   }
   case VStmt::While:
     for (const auto &Nested : static_cast<const VWhileStmt &>(S).Body)
-      if (!pointerReturnsComeFrom(*Nested, Params))
+      if (!pointerReturnsComeFrom(*Nested, Sources))
         return false;
     return true;
   case VStmt::Seq:
     for (const auto &Nested : static_cast<const VSeqStmt &>(S).Stmts)
-      if (!pointerReturnsComeFrom(*Nested, Params))
+      if (!pointerReturnsComeFrom(*Nested, Sources))
         return false;
     return true;
   case VStmt::GhostBlock:
@@ -1712,12 +1714,15 @@ static bool pointerReturnsComeFrom(const VStmt &S,
   }
 }
 
-static bool pointerReturnsComeFrom(const VFunction &Fn,
-                                   const std::set<std::string> &Params) {
+/// The variables a pointer \p Fn returns may be, when every pointer it
+/// returns is null or a variable.
+static std::optional<std::set<std::string>>
+returnedPointers(const VFunction &Fn) {
+  std::set<std::string> Sources;
   for (const auto &S : Fn.Body)
-    if (!pointerReturnsComeFrom(*S, Params))
-      return false;
-  return true;
+    if (!pointerReturnsComeFrom(*S, Sources))
+      return std::nullopt;
+  return Sources;
 }
 
 static std::unique_ptr<VExpr> samePointerRegion(const VExpr *L, const VExpr *R,
@@ -1959,18 +1964,36 @@ static bool functionMayWriteHeap(const VFunction &Fn, const FunctionMap &FnMap,
   return Writes;
 }
 
-static bool hasImplicitHeapEffect(const VFunction &Fn,
-                                  const FunctionMap &FnMap) {
+void verify::inferBodySummaries(
+    std::vector<std::unique_ptr<VFunction>> &Functions) {
+  FunctionMap FnMap;
+  for (const auto &Fn : Functions)
+    FnMap[Fn->Identity] = Fn.get();
+  for (const auto &Fn : Functions) {
+    std::set<std::string> Active;
+    Fn->MayWriteHeap = functionMayWriteHeap(*Fn, FnMap, Active);
+    Fn->ReturnedPointers = returnedPointers(*Fn);
+    if (Fn->IsProof || Fn->IsExternalContract)
+      continue;
+    for (const auto &Param : Fn->Params) {
+      std::set<std::pair<std::string, std::string>> ActiveScans;
+      if (scalarDynamicCalleeSafe(*Fn, Param.first, FnMap, ActiveScans))
+        Fn->LendableScalarParams.insert(Param.first);
+      if (keepsNoAddress(*Fn, Param.first, /*AllowExtent=*/false, FnMap,
+                         ActiveScans))
+        Fn->LendableRecordParams.insert(Param.first);
+    }
+  }
+}
+
+static bool hasImplicitHeapEffect(const VFunction &Fn) {
   if (Fn.IsProof || !Fn.Modifies.empty())
     return false;
   bool HasPointerParam = false;
   for (const auto &Param : Fn.Params)
     HasPointerParam |= Param.second.Kind == VTypeKind::Ptr &&
                        !Fn.ConstAddressParams.count(Param.first);
-  if (!HasPointerParam)
-    return false;
-  std::set<std::string> Active;
-  return functionMayWriteHeap(Fn, FnMap, Active);
+  return HasPointerParam && Fn.MayWriteHeap;
 }
 
 /// A global variable's fixed address: its cell is always accessible and
@@ -4214,7 +4237,7 @@ class PassivizerImpl {
         const VFunction *Callee = It->second;
         if (Callee->IsSpec || Callee->IsProof)
           break;
-        if (Callee->UsesDynamicStorage || hasImplicitHeapEffect(*Callee, FnMap))
+        if (Callee->UsesDynamicStorage || hasImplicitHeapEffect(*Callee))
           return false;
         for (const auto &Object : Callee->PrivateObjects)
           Out.push_back(privateRegion(*Object, C.Loc));
@@ -4909,7 +4932,7 @@ class PassivizerImpl {
       if (Callee != FnMap.end() &&
           (!Callee->second->Modifies.empty() ||
            !Callee->second->PrivateObjects.empty() ||
-           hasImplicitHeapEffect(*Callee->second, FnMap)))
+           hasImplicitHeapEffect(*Callee->second)))
         Out.insert(VHeapName);
       if (Callee != FnMap.end())
         for (unsigned I = 0;
@@ -5599,7 +5622,7 @@ public:
                                : nullptr);
     }
     havocFootprints(P, Renames, Fn, Footprints, Counts, ParamMap, Ctx,
-                    EntryHeap, hasImplicitHeapEffect(Fn, FnMap), Fn.DeclLoc);
+                    EntryHeap, hasImplicitHeapEffect(Fn), Fn.DeclLoc);
     if (Fn.ReturnType.Kind == VTypeKind::Struct) {
       for (const auto &[Field, Ty] : Fn.ReturnFields) {
         const std::string Name = "result." + Field;
@@ -6036,7 +6059,6 @@ public:
     for (const auto &[Name, Field] : Callee->FieldParams)
       ParamMap[Name] = substParams(Field.get(), ParamMap, Ctx, EntryHeap);
     std::set<std::string> DynamicParams;
-    std::set<std::pair<std::string, std::string>> ActiveScans;
     for (const auto &Param : Callee->Params)
       if (auto It = ParamMap.find(Param.first);
           It != ParamMap.end() && hasPointerProvenance(It->second.get())) {
@@ -6045,12 +6067,9 @@ public:
         // parameter is accessed only inside it, at any field or element.
         const bool RecordObject =
             Fn.ObjectModel && Callee->RecordParams.count(Param.first);
-        if (Callee->IsProof || Callee->IsExternalContract ||
-            !(RecordObject
-                  ? keepsNoAddress(*Callee, Param.first, /*AllowExtent=*/false,
-                                   FnMap, ActiveScans)
-                  : scalarDynamicCalleeSafe(*Callee, Param.first, FnMap,
-                                            ActiveScans))) {
+        if (!(RecordObject ? Callee->LendableRecordParams
+                           : Callee->LendableScalarParams)
+                 .count(Param.first)) {
           emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
                       nullptr, C.Loc, ProofObligationKind::Unsupported,
                       "the address of local or dynamic storage is passed to " +
@@ -6074,7 +6093,8 @@ public:
     if (Callee->ReturnType.Kind == VTypeKind::Ptr && !C.ResultTarget.empty() &&
         !ReturnsFreshOwned && !DynamicParams.empty() &&
         (C.ResultProvenanceTarget.empty() ||
-         !pointerReturnsComeFrom(*Callee, DynamicParams))) {
+         !Callee->ReturnedPointers ||
+         !llvm::includes(DynamicParams, *Callee->ReturnedPointers))) {
       emitPassive(P, PassiveStmt::Assert, makeBoolLiteral(false, C.Loc),
                   nullptr, C.Loc, ProofObligationKind::Unsupported,
                   C.Callee + " may return a pointer other than its "
@@ -6085,7 +6105,7 @@ public:
       emitExprSafety(P, ParamMap[Callee->Params[I].first].get(), nullptr, C.Loc,
                      Renames, true, C.Args[I].get());
     const bool HasImplicitHeapEffect =
-        !ReturnsFreshOwned && hasImplicitHeapEffect(*Callee, FnMap);
+        !ReturnsFreshOwned && hasImplicitHeapEffect(*Callee);
     for (const VValidExtent &Extent : Callee->ValidExtents) {
       auto Actual = ParamMap.find(Extent.Base);
       if (Actual == ParamMap.end()) {
