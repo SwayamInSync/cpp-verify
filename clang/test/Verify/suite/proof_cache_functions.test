@@ -91,6 +91,10 @@
 # CORRUPT-NOT: (proof cache)
 # CORRUPT: Summary: 4 verified, 1 failed
 
+# That run wrote the records again.
+# RUN: not %cpp-verify --jobs=1 --proof-cache=%t/one %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=REPAIRED
+# REPAIRED: Summary: 4 verified, 1 failed, 3 reused from the proof cache in
+
 #--- base.cpp
 #include <cppverify.h>
 namespace cv = cppverify;
