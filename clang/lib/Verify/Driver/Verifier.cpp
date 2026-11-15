@@ -3022,7 +3022,8 @@ constexpr unsigned ResultRecordVersion = 1;
 
 /// The options a function's verdicts depend on, as part of the key of its
 /// record; nothing for a run whose verifications are not recorded. A proof
-/// holds under any limit of time or memory, so those are not in it.
+/// holds under any limit of time or memory, so those are not in it, nor is
+/// --time-report, which only measures.
 std::optional<std::string> resultCacheManifest(const VerifyOptions &Opts) {
   // Every option, in the order of its declaration: one added to
   // VerifyOptions does not compile here until it is placed.
@@ -3056,7 +3057,6 @@ std::optional<std::string> resultCacheManifest(const VerifyOptions &Opts) {
   W.number(Quiet);
   W.number(Verbose);
   W.number(ListFunctions);
-  W.number(TimeReport);
   W.number(MaxFailures);
   W.number(ConfirmBound);
   W.number(QuietWithoutFunctions);
