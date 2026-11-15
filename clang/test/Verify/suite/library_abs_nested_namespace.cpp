@@ -1,8 +1,11 @@
 // RUN: not %cpp-verify --jobs=1 %s -- -nostdinc++ -isystem %S/Inputs/libcxx_abs > %t 2>&1
 // RUN: FileCheck %s < %t
+// RUN: not %cpp-verify --jobs=1 %s -- -nostdinc++ -isystem %S/Inputs/ucrt_abs > %t.ucrt 2>&1
+// RUN: FileCheck %s < %t.ucrt
 //
 // std::abs of an integer is its definition wherever the library declares it
-// within std: libc++ defines it in std::__math. An abs in a namespace of the
+// within std: libc++ defines it in std::__math, and the Windows C runtime in
+// the global namespace, with a const parameter. An abs in a namespace of the
 // user's own is a function like any other.
 
 #include <cppverify.h>
