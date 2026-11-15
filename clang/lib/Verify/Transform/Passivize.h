@@ -189,6 +189,11 @@ public:
   PassiveProgram contract(const VFunction &Fn);
 };
 
+/// Sets what callers read of each function's body, from the bodies of all of
+/// them: VFunction::LendableScalarParams, LendableRecordParams, MayWriteHeap,
+/// and ReturnedPointers.
+void inferBodySummaries(std::vector<std::unique_ptr<VFunction>> &Functions);
+
 } // namespace verify
 } // namespace clang
 
