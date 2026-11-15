@@ -1092,6 +1092,15 @@ library can compile Z3's timed wait, which libstdc++ 14.1 to 14.3 and 15.1 to
 15.2 cannot under TSan (GCC PR 121496), and says how to select another
 (:doc:`language/tooling`).
 
+**Releases built by their own Clang.** Each release archive was built by its
+runner's host compiler, GCC on Linux and Apple Clang on macOS, so the two
+platforms' binaries came from different compilers; before 0.1.0 that
+difference showed as 53 failing tests on macOS, where the verifier depended
+on the order in which arguments are evaluated. A release is now built in two
+stages (``.github/workflows/cppverify-release-build.sh``): the host compiler
+builds Clang, and that Clang builds the distribution, the built-in Z3
+included, on both platforms.
+
 Data formats
 ~~~~~~~~~~~~
 
