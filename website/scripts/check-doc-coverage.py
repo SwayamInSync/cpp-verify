@@ -27,7 +27,7 @@ BLOCK = re.compile(r"^(\s*)\.\. code-block::\s*(\S+)\s*$")
 def cpp_examples(pages):
     found = []
     for page in pages:
-        lines = page.read_text().splitlines()
+        lines = page.read_text(encoding="utf-8").splitlines()
         for index, line in enumerate(lines):
             match = BLOCK.match(line)
             if not match or match.group(2) != "cpp":
@@ -51,13 +51,13 @@ def main():
     root = parser.parse_args().root
 
     constructs = (root /
-                  "clang/include/clang/Basic/CppVerifyConstructs.def").read_text()
+                  "clang/include/clang/Basic/CppVerifyConstructs.def").read_text(encoding="utf-8")
     keywords = re.findall(r'^CPPVERIFY_CONSTRUCT\(\w+, "(\w+)"', constructs,
                           re.M)
-    main_cpp = (root / "clang/tools/cpp-verify/Main.cpp").read_text()
+    main_cpp = (root / "clang/tools/cpp-verify/Main.cpp").read_text(encoding="utf-8")
     options = sorted(set(re.findall(
         r"cl::(?:opt|list)<.*?>\s*\w+\(\s*\"([\w-]+)\"", main_cpp, re.S)))
-    backend = (root / "clang/lib/Verify/Backend/VerifyBackend.cpp").read_text()
+    backend = (root / "clang/lib/Verify/Backend/VerifyBackend.cpp").read_text(encoding="utf-8")
     reasons = sorted(set(re.findall(r'return "([a-z]+(?:\.[a-z-]+)+)";',
                                     backend)))
     backends = re.findall(r"expected ([\w, ]+), or (\w+)", main_cpp)
@@ -67,8 +67,8 @@ def main():
     source = root / "website/source"
     reference = sorted((source / "language").glob("*.rst"))
     book = sorted((source / "book").rglob("*.rst"))
-    reference_text = "".join(page.read_text() for page in reference)
-    book_text = "".join(page.read_text() for page in book)
+    reference_text = "".join(page.read_text(encoding="utf-8") for page in reference)
+    book_text = "".join(page.read_text(encoding="utf-8") for page in book)
     reference_code = cpp_examples(reference)
     book_code = cpp_examples(book)
 
