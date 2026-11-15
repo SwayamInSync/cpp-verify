@@ -214,6 +214,10 @@ VFunction verify::cloneVFunction(const VFunction &Fn) {
   Out.ConstAddressParams = Fn.ConstAddressParams;
   Out.OutParameters = Fn.OutParameters;
   Out.BoundedPointers = Fn.BoundedPointers;
+  Out.LendableScalarParams = Fn.LendableScalarParams;
+  Out.LendableRecordParams = Fn.LendableRecordParams;
+  Out.MayWriteHeap = Fn.MayWriteHeap;
+  Out.ReturnedPointers = Fn.ReturnedPointers;
   Out.ReturnFields = Fn.ReturnFields;
   Out.ExplicitPreconditionCount = Fn.ExplicitPreconditionCount;
   for (const auto &P : Fn.Preconditions)

@@ -3063,6 +3063,26 @@ retry, whenever they settle the module: when one fails, as when they prove
 all of it. A proof cache stores proofs of single obligations, so with one
 only the obligations are solved.
 
+The proof cache also holds records of whole functions, consulted before
+passivization (`runFunction` in `Verifier.cpp`). The verification of one
+function is given only the functions its converted form names, and those
+they name in turn (`scopeOf`): specs whole, any other function as a clone
+without its body and clause-proof bodies. What callers used to read of a
+callee's body is inferred once for the whole program by
+`inferBodySummaries` (`LendableScalarParams`, `LendableRecordParams`,
+`MayWriteHeap`, `ReturnedPointers`). So a verification's result is a
+function of that scope and the options, and the key (`resultKey`) is the
+SHA-256 of exactly those: `digestVFunction` (`IR/VHash.cpp`) of the
+function and of each function in scope, without source positions, the
+identities named that no function has, and `resultCacheManifest`. A
+dependency the scope misses is therefore a wrong verdict a test sees, not
+a stale record. `VHash.cpp` and the record writer name every member of
+the structures they cover through structured bindings and size
+assertions, so a member added to one stops the build until it is placed.
+A record (`recordOf`, `runOf`) is a whitelist of what a proof's
+diagnostics carry; a run with anything else is not recorded. The settling
+of what verdicts rest on runs on records and fresh runs alike.
+
 Every query runs in an encoder of its own (`Z3VerifyBackend::solveQuery`):
 a Z3 context keeps the state of the queries solved in it, as far as an
 interrupted one got, and that state steers the search of the next. With one

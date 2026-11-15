@@ -3,6 +3,7 @@
 #define LLVM_CLANG_VERIFY_DRIVER_CPPVERIFYVERSION_H
 
 #include "llvm/ADT/StringRef.h"
+#include <string>
 #include "llvm/Support/raw_ostream.h"
 
 namespace clang {
@@ -28,6 +29,11 @@ void printVersion(llvm::raw_ostream &OS);
 
 /// The release, as --version names it: "0.2.0-dev".
 llvm::StringRef releaseVersion();
+/// What tells this build of the verifier and its Z3 from any other: the
+/// release, the revision, the Z3 it links, and for a development build the
+/// size and time of the executable, since its revision does not change with
+/// its sources.
+std::string buildIdentity();
 
 } // namespace verify
 } // namespace clang

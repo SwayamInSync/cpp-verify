@@ -1,5 +1,6 @@
 //===--- CppVerifyVersion.cpp - cpp-verify and backend versions -----------===//
 #include "CppVerifyVersion.h"
+#include <chrono>
 #include "clang/Basic/Version.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
@@ -124,6 +125,25 @@ void printLean(llvm::raw_ostream &OS) {
 } // namespace
 
 llvm::StringRef verify::releaseVersion() { return CPPVERIFY_VERSION_STRING; }
+
+std::string verify::buildIdentity() {
+  std::string Identity = releaseVersion().str() + ";" +
+                         getClangFullRepositoryVersion() + ";z3=" +
+                         Z3_get_full_version();
+  if (!releaseVersion().ends_with("-dev"))
+    return Identity;
+  static int Anchor;
+  const std::string Executable =
+      llvm::sys::fs::getMainExecutable(nullptr, &Anchor);
+  llvm::sys::fs::file_status Status;
+  if (!llvm::sys::fs::status(Executable, Status))
+    Identity += ";built=" + std::to_string(Status.getSize()) + "@" +
+                std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                                   Status.getLastModificationTime()
+                                       .time_since_epoch())
+                                   .count());
+  return Identity;
+}
 
 void verify::printVersion(llvm::raw_ostream &OS) {
   OS << "cpp-verify " << CPPVERIFY_VERSION_STRING;
