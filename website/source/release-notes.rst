@@ -544,6 +544,24 @@ statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Proved functions are not verified again.** The proof cache kept proofs of
+single obligations, and looked them up after lowering a function, which for
+many functions is most of the time: a second run of the suite's
+``safe_fib.cpp`` took 5.4 s of the first run's 5.8 s. With the Z3 backend,
+``--proof-cache`` (``-fverify-cache``) now also records each function all of
+whose verdicts are proofs, under a key of everything its verification read:
+the function, the contracts of the functions it calls, the specs it applies
+with their bodies, the records it uses, the options that change what is
+proved, and the build of the verifier and of Z3. A run that makes the same
+key reads the record before it lowers anything: the second run takes 0.05 s.
+Moving code, comments, and edits to other functions leave a record valid; an
+edit to a callee's body verifies the callee again and not its callers. What
+each verdict rests on is still settled in every run, so a recorded proof is
+demoted when a contract it assumes fails. Failures, unresolved verdicts, and
+proof functions are verified every run. ``--proof-cache-check`` verifies all
+the same and reports a record that differs. See *Functions the proof cache
+replays* in the tooling reference.
+
 **Source lookups from parallel failures.** With more than one job, a failure
 whose counterexample passes through a loop gets notes from unrolling the
 loop, and those looked up source lines without the lock that the other
