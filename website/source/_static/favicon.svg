@@ -1,9 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="CppVerify">
-  <rect width="64" height="64" rx="14.8" fill="#3b6fd9"></rect>
-  <rect width="64" height="32" rx="14.8" fill="#ffffff" opacity="0.07"></rect>
-  <g fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round">
-    <line x1="16" y1="17.3" x2="16" y2="46.7"></line>
-    <line x1="16" y1="32" x2="36.2" y2="32"></line>
-  </g>
-  <rect x="37.4" y="24.5" width="15" height="15" rx="2.6" fill="#ffffff"></rect>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" aria-label="CppVerify" role="img" viewBox="0 0 64 64"><rect width="64" height="64" fill="#3b6fd9" rx="14.8"/><rect width="64" height="32" fill="#fff" opacity=".07" rx="14.8"/><g fill="none" stroke="#fff" stroke-linecap="round" stroke-width="6"><line x1="16" x2="16" y1="17.3" y2="46.7"/><line x1="16" x2="36.2" y1="32" y2="32"/></g><rect width="15" height="15" x="37.4" y="24.5" fill="#fff" rx="2.6"/></svg>
