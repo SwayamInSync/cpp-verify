@@ -115,6 +115,7 @@ static void addSummary(VerifySummary &To, const VerifySummary &From) {
   To.Lowered += From.Lowered;
   To.Exported += From.Exported;
   To.Interrupted += From.Interrupted;
+  To.Reused += From.Reused;
   for (const auto &[Reason, Count] : From.Reasons)
     To.Reasons[Reason] += Count;
 }
@@ -3031,7 +3032,8 @@ std::optional<std::string> resultCacheManifest(const VerifyOptions &Opts) {
                SolverTimeoutMs, CollectionTimeoutMs, FunctionTimeoutMs,
                CertifyTimeoutMs, SolverResourceLimit, Jobs, MaxQueryNodes,
                MemoryLimitMB, IntegerEncoding, CVC5Path, ProofCachePath,
-               ProofCacheMaxBytes, ProofCacheMaxEntries, CheckUB,
+               ProofCacheMaxBytes, ProofCacheMaxEntries, ProofCacheCheck,
+               CheckUB,
                ProfileQuantifiers, Diagnostics, ObligationOut, Quiet, Verbose,
                ListFunctions, TimeReport, Progress, MaxFailures,
                FunctionPatterns, ConfirmBound, Summary, Parts, CrossFile,
@@ -3101,6 +3103,8 @@ class Verifier {
     uint64_t Induction = 0;
     uint64_t Certification = 0;
     uint64_t Confirmation = 0;
+    /// Its verdicts were read from the proof cache.
+    bool Reused = false;
   };
   std::vector<FunctionTime> Timings;
   std::chrono::steady_clock::time_point RunStart =
@@ -5895,19 +5899,35 @@ public:
     auto runFunction = [&](size_t I) {
       const auto Start = std::chrono::steady_clock::now();
       std::string Key;
+      std::optional<std::string> Recorded;
       if (Results) {
         Key = resultKey(I);
         ProofCacheRecord Record = Results->lookupRecord(Key);
         if (Record.Kind == ProofCacheLookupKind::Hit)
-          if (std::optional<FunctionRun> Recorded = runOf(Record.Payload))
-            Runs[I] = std::move(*Recorded);
+          if (std::optional<FunctionRun> Run = runOf(Record.Payload)) {
+            Recorded = std::move(Record.Payload);
+            if (!Opts.ProofCacheCheck)
+              Runs[I] = std::move(*Run);
+          }
       }
       if (!Runs[I].Reused) {
         verifyFunction(I);
-        // A record that cannot be written costs only the next run's time.
-        if (Results)
-          if (std::optional<std::string> Record = recordOf(Runs[I]))
-            llvm::consumeError(Results->storeRecord(Key, *Record));
+        const std::optional<std::string> Record =
+            Results ? recordOf(Runs[I]) : std::nullopt;
+        if (Recorded && Record != Recorded) {
+          // --proof-cache-check: the record is not what the function's
+          // verification establishes, so the key misses something the
+          // verification read, or the verification is not deterministic.
+          Runs[I].AllOk = false;
+          Runs[I].Diags.push_back(
+              {VerifyDiagnostic::Error,
+               "the proof cache's record of " + Functions[I]->Name +
+                   " differs from its verification",
+               Functions[I]->DeclLoc, Functions[I]->Name});
+        } else if (Record && !Recorded) {
+          // A record that cannot be written costs only the next run's time.
+          llvm::consumeError(Results->storeRecord(Key, *Record));
+        }
       }
       Runs[I].Task = nanosecondsSince(Start);
       if (!ShowProgress)
@@ -5950,6 +5970,9 @@ public:
     if (ShowProgress && Done != 0)
       llvm::errs() << "\r\x1b[K";
     Verified = std::chrono::steady_clock::now();
+    if (Opts.Summary)
+      for (const FunctionRun &Run : Runs)
+        Opts.Summary->Reused += Run.Reused && !Run.Diags.empty();
     // The report lists the functions reported, as a run of the whole file
     // would, with the time of the confirmations below.
     llvm::scope_exit ReportTimes([&] {
@@ -5968,6 +5991,7 @@ public:
         Time.Induction = Run.Times->Induction;
         Time.Certification = Run.Times->Certification;
         Time.Confirmation = Run.Notes + Run.Confirmed;
+        Time.Reused = Run.Reused;
         Timings.push_back(std::move(Time));
       }
     });
@@ -7241,6 +7265,8 @@ public:
                                {"induction", seconds(Time->Induction)},
                                {"certification", seconds(Time->Certification)},
                                {"confirmation", seconds(Time->Confirmation)}};
+        if (Time->Reused)
+          Record["proof_cache"] = true;
         OS << llvm::json::Value(std::move(Record)) << "\n";
       }
       return;
@@ -7260,7 +7286,8 @@ public:
                           seconds(Time->Total), seconds(lowering(*Time)),
                           seconds(Time->Solving), seconds(Time->Induction),
                           seconds(Time->Certification),
-                          seconds(Time->Confirmation), Time->Name);
+                          seconds(Time->Confirmation),
+                          Time->Name + (Time->Reused ? " (proof cache)" : ""));
   }
 
   /// Whether \p D is reported, and so counted: a hidden one is not, nor a
