@@ -528,6 +528,10 @@ public:
                  ConstAddressParams,
                  OutParameters,
                  BoundedPointers,
+                 LendableScalarParams,
+                 LendableRecordParams,
+                 MayWriteHeap,
+                 ReturnedPointers,
                  ReturnFields,
                  ExplicitPreconditionCount,
                  Preconditions,
@@ -639,6 +643,12 @@ public:
     texts(ConstAddressParams);
     texts(OutParameters);
     texts(BoundedPointers);
+    texts(LendableScalarParams);
+    texts(LendableRecordParams);
+    flag(MayWriteHeap);
+    flag(ReturnedPointers.has_value());
+    if (ReturnedPointers)
+      texts(*ReturnedPointers);
     typed(ReturnFields);
     number(ExplicitPreconditionCount);
     exprs(Preconditions);
