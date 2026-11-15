@@ -93,6 +93,12 @@ execution and the number of iterations, and the bug is in the code or the
 contract, not in the invariant. When the check fails only in executions that
 fail an earlier check first, the note names that check: fix it first.
 
+The search is quick by design: it takes at most a sixth of the query timeout,
+5 s by default. On a loop whose unrolling is expensive it may end before the
+bound, and the note then says how far it got (``no execution fails this check
+within 3 iterations of each loop; the search ran out of time there``). A
+larger ``--timeout`` gives it more time.
+
 A function reports its first failing check. To see every one, each with its
 own counterexample, run ``cpp-verify --max-failures=0``: a check after a
 failure is reported only when some execution that passes the earlier failing
