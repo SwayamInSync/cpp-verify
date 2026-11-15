@@ -1,3 +1,5 @@
+# The stand-ins for cvc5 are scripts, which Windows does not run as programs.
+# UNSUPPORTED: system-windows
 # RUN: cp %S/Inputs/fake_cvc5.py %t.unknown
 # RUN: cp %S/Inputs/fake_cvc5.py %t.comment
 # RUN: cp %S/Inputs/fake_cvc5.py %t.trailing
