@@ -462,7 +462,10 @@ derivation shows it, so it needs no ``cppverify::decreases``.
   by computing the predicate over all of them; otherwise by finding a
   derivation (true) or by a proved postcondition that excludes the argument
   (false), on which the failure then rests. Undecided, the message names
-  the application, such as ``whether odd(4) holds``.
+  the application, such as ``whether odd(4) holds``. The search for a
+  derivation is short on purpose: it explores about a thousand arguments
+  and then a few heights, so an application no search can decide costs a
+  fraction of a second, whatever the counterexample.
 - When no unfolding settles a claim, the reason says what the claim needs.
   Where the predicate's derivations from an argument go round a cycle
   (``linked`` over a list whose cell points to itself), it is false there,
