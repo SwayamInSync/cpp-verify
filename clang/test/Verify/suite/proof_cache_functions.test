@@ -64,6 +64,12 @@
 # FIELD-DAG: {{ clamp \(proof cache\)$}}
 # FIELD-DAG: {{ user \(proof cache\)$}}
 
+# The fields of a record in another order, its size the same: the functions
+# over the record are verified again.
+# RUN: not %cpp-verify --jobs=1 --time-report --proof-cache=%t/cache %t/order.cpp -- 2>&1 | FileCheck %s --check-prefix=ORDER
+# ORDER-DAG: {{ first$}}
+# ORDER-DAG: {{ clamp \(proof cache\)$}}
+
 # A constant changed: the function that uses it is verified again.
 # RUN: not %cpp-verify --jobs=1 --time-report --proof-cache=%t/cache %t/constant.cpp -- 2>&1 | FileCheck %s --check-prefix=CONSTANT
 # CONSTANT-DAG: error: verification failed: user [precondition]
@@ -392,6 +398,53 @@ const int Limit = -1;
 cv::spec int twice(int x) { return 2 * x; }
 
 struct Pair { int a; int b; };
+
+int first(const Pair &p)
+  cv::post(cv::result == p.a)
+{
+  return p.a;
+}
+
+int clamp(int x, int lo, int hi)
+  cv::pre(lo <= hi)
+  cv::post(cv::result == (x < lo ? lo : x > hi ? hi : x))
+{
+  if (x < lo)
+    return lo;
+  if (x > hi)
+    return hi;
+  return x;
+}
+
+int user(int x)
+  cv::pre(x >= 0 && x < 100)
+  cv::post(cv::result == twice(x))
+{
+  return clamp(x + x, 0, Limit);
+}
+
+cv::proof void lemma_twice(int x)
+  cv::pre(x >= 0 && x < 100)
+  cv::post(twice(x) >= x)
+{
+}
+
+int wrong(int x)
+  cv::pre(x < 100)
+  cv::post(cv::result > x + 1)
+{
+  return x + 1;
+}
+
+#--- order.cpp
+#include <cppverify.h>
+namespace cv = cppverify;
+
+const int Limit = 1000;
+
+cv::spec int twice(int x) { return 2 * x; }
+
+struct Pair { int b; int a; };
 
 int first(const Pair &p)
   cv::post(cv::result == p.a)
