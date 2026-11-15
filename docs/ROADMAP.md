@@ -1,5 +1,49 @@
 # Roadmap
 
+## Release 0.2.0 (in development, based on LLVM 23.1.3)
+
+0.2.0 keeps 0.1's contract language and widens what it can be written
+about. The [release notes](https://swayaminsync.github.io/cpp-verify/release-notes.html)
+describe every change with an example, and the
+[migration page](https://swayaminsync.github.io/cpp-verify/migrating-to-0.2.html)
+what a user of 0.1.1 has to change. On `main` today:
+
+- **Classes and templates.** Member functions, constructors, member
+  operators, and class invariants at public boundaries; function and class
+  templates verified per specialization; records by value, in memory,
+  through pointers and references; out-parameters.
+- **Everyday C++.** Calls anywhere in an expression, in C++'s evaluation
+  order; `switch`, range-based `for`, and the remaining loop forms; global
+  records and arrays, static locals, lookup tables; `assert`; functions
+  without contracts verified where they are called; models of `memcpy`,
+  `memmove`, `memset`, `memcmp`, `abs`, `std::min`, and `std::max`.
+- **Contracts that mean what they say.** A contract must be defined where it
+  is evaluated; verification-only constructs are errors in executable code;
+  contracts hold across the files of a run.
+- **Proof automation.** Induction found for lemmas that time out;
+  counterexamples confirmed by proof when their check cannot evaluate a
+  spec; every failure of a function reported, at the part that fails.
+- **Solvers and proofs.** cvc5 1.1.2 to 1.4.2 with counterexamples shown as
+  source values; Lean 4.35.0 with a module per function, spec functions as
+  definitions, collections, and counterexamples confirmed in Lean; every
+  query replayable as an SMT-LIB script.
+- **Running it.** Verification inside a build (`clang++ -fverify-contracts`)
+  before code is generated; results as JSON records, SARIF, and GitHub
+  annotations; a summary line; Ctrl-C; memory and time limits per function;
+  a proof cache that replays proved functions before lowering them.
+- **How it is tested.** Linux, macOS, and Windows run the Verify tests;
+  verdicts are checked against execution every night; AddressSanitizer,
+  UndefinedBehaviorSanitizer, ThreadSanitizer, and a fuzzer of the archive
+  reader run every night; a release is built by the Clang it ships; a new
+  Z3 release is adopted only through a verdict-and-time gate.
+
+Before the release: the last LLVM 23.1.x point release, a release candidate,
+and the verdict-and-time differential against 0.1.1.
+
+After 0.2.0 the next frontiers are floating-point semantics, inheritance and
+virtual dispatch, library types (`std::vector`, `std::array`, smart
+pointers), `new[]`, exceptions, lambdas, and candidate loop invariants.
+
 ## Release 0.1.0 (based on LLVM 23.1.3)
 
 The end-to-end MVP gate is achieved and permanently exercises:
@@ -32,9 +76,10 @@ and the backend versions.
 
 Current boundaries are listed in the
 [limitations reference](https://swayaminsync.github.io/cpp-verify/language/limitations.html).
-The next frontiers are floating-point semantics, member functions and
-templates, `break`/`continue` in `do` loops, and general arrays and provenance
-across ownership-taking interfaces.
+The frontiers named at this release were floating-point semantics, member
+functions and templates, `break`/`continue` in `do` loops, and general arrays
+and provenance across ownership-taking interfaces; 0.2.0 covers member
+functions, templates, and the loop forms.
 
 ## Historical 2-Month MVP Timeline
 
@@ -216,7 +261,9 @@ recognition").
 - [x] cvc5, strict Z3+cvc5 portfolio, and Lean export/certification backends
 - [x] Exact machine-integer encodings (`--int-encoding`)
 - Symbolic execution backend for test generation
-- Compositional verification across translation units
+- [x] Contracts across the files of a run (`cpp-verify a.cpp b.cpp`,
+  `-fverify-contracts-out`)
+- Compositional verification of a whole program's link
 
 ### Ring 6: Concurrency
 
@@ -228,5 +275,6 @@ recognition").
 
 - Clang-tidy integration
 - IDE plugin (VSCode) with inline diagnostics
-- CI/CD integration mode
+- [x] CI/CD integration (`--diagnostics-format=github`, SARIF, JSON records,
+  `-fverify-contracts` in a build)
 - Contract documentation generation
