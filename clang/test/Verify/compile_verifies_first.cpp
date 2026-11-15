@@ -1,5 +1,5 @@
-// RUN: not %clang_cc1 -std=c++17 -fverify-contracts -emit-llvm -o - %s 2>&1 | FileCheck %s
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o - %s | FileCheck %s --check-prefix=SKIPPED
+// RUN: not %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++17 -fverify-contracts -emit-llvm -o - %s 2>&1 | FileCheck %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o - %s | FileCheck %s --check-prefix=SKIPPED
 //
 // A compilation verifies before it generates IR, never beside it: IR
 // generation fills caches of the ASTContext and the SourceManager that the
