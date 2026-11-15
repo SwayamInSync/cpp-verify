@@ -818,9 +818,10 @@ unsupported``), nor are the string functions (``strlen``, ``strcmp``).
 
 ``abs``, ``labs``, ``llabs``, and ``std::abs`` of an integer are their
 definition, ``x < 0 ? -x : x`` in the parameter's type, whether the library
-defines ``std::abs`` in ``std`` (libstdc++) or in the global namespace of its
-``<stdlib.h>`` (libc++, so on macOS); an ``abs`` of your own is a function like
-any other: ``abs(INT_MIN)`` is
+defines ``std::abs`` in ``std`` (libstdc++), in a namespace of its own within
+``std`` (libc++ since LLVM 20, so with the macOS 26 SDK), or in the global
+namespace of its ``<stdlib.h>`` (older libc++); an ``abs`` of your own is a
+function like any other: ``abs(INT_MIN)`` is
 an ``overflow``, in a contract too. In a spec, whose integers are
 mathematical, it is the absolute value, so a spec's ``abs(-2147483648)`` is
 ``2147483648``.

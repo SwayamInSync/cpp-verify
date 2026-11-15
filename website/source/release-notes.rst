@@ -1048,6 +1048,14 @@ CI and the nightly stability run now use macOS 15; a release is built on
 macOS 15, still for macOS 13 and later, and its archive is tested on
 macOS 26.
 
+**std::abs with the macOS 26 SDK.** libc++ has defined ``std::abs`` of an
+integer in ``std::__math`` since LLVM 20, and the verifier recognized it only
+when declared directly in ``std`` or in the global namespace, so with the
+macOS 26 SDK ``std::abs(a - b)`` was ``construct.unsupported`` ("call to
+function without a verification contract: abs"). It is now its definition
+wherever the library declares it within ``std``. Testing the release archive
+on macOS 26 found this.
+
 **Sanitizers every night.** The verifier's own code is now built with
 AddressSanitizer and UndefinedBehaviorSanitizer (``-DCPPVERIFY_SANITIZER``),
 and every Verify test program runs through that build every night; a report
