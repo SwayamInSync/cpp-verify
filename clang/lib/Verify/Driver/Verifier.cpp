@@ -3020,7 +3020,7 @@ struct RecordReader {
 };
 
 /// Bumped whenever what a record holds, or how a key is made, changes.
-constexpr unsigned ResultRecordVersion = 1;
+constexpr unsigned ResultRecordVersion = 2;
 
 /// The options a function's verdicts depend on, as part of the key of its
 /// record; nothing for a run whose verifications are not recorded. A proof
@@ -3962,6 +3962,10 @@ public:
       uint64_t Confirmed = 0;
       /// Read from the proof cache, not verified by this run.
       bool Reused = false;
+      /// For a run read from the proof cache: the function is a proof
+      /// function whose verification made a theorem (Contract), which a
+      /// record does not hold.
+      bool TheoremUnread = false;
     };
     std::vector<FunctionRun> Runs(Functions.size());
 
@@ -4006,12 +4010,16 @@ public:
                    CallDependencies, UnframedSpecs, UnprovenPosts,
                    ProofDependencies, InductiveLines, Confirmations,
                    Refutations, Contract, ContractCheck, Dump, Archive,
-                   Interrupted, Times, Task, Notes, Confirmed, Reused] = Run;
+                   Interrupted, Times, Task, Notes, Confirmed, Reused,
+                   TheoremUnread] = Run;
       if (!AllOk || AnyFailed || !Confirmations.empty() ||
-          !Refutations.empty() || Contract || !Dump.empty() ||
-          !Archive.empty() || Interrupted || Reused)
+          !Refutations.empty() || !Dump.empty() || !Archive.empty() ||
+          Interrupted || Reused || TheoremUnread)
         return std::nullopt;
       RecordWriter W;
+      // The theorem of a proof function is made again by the few runs that
+      // use one: those with a counterexample to confirm by proof.
+      W.number(Contract != nullptr);
       W.number(Diags.size());
       for (const VerifyDiagnostic &D : Diags) {
         const auto &[K, Message, Loc, FunctionName, Result, LeanAutomatic,
@@ -4135,6 +4143,7 @@ public:
       FunctionRun Run;
       Run.Reused = true;
       Run.Times = std::make_shared<BackendTimes>();
+      Run.TheoremUnread = R.flag();
       for (size_t I = 0, E = R.count(); I != E && R.Ok; ++I) {
         VerifyDiagnostic D;
         const uint64_t K = R.number();
@@ -5971,6 +5980,21 @@ public:
     }
     if (ShowProgress && Done != 0)
       llvm::errs() << "\r\x1b[K";
+    // A confirmation by proof uses the theorems of proof functions, which
+    // records do not hold: a run with one to make verifies the recorded
+    // proof functions after all, for their theorems alone.
+    if (llvm::any_of(Runs, [](const FunctionRun &Run) {
+          return !Run.Confirmations.empty();
+        }))
+      for (size_t I = 0; I != Runs.size(); ++I)
+        if (Runs[I].TheoremUnread) {
+          FunctionRun Recorded = std::move(Runs[I]);
+          Runs[I] = FunctionRun();
+          verifyFunction(I);
+          Recorded.Contract = std::move(Runs[I].Contract);
+          Recorded.TheoremUnread = false;
+          Runs[I] = std::move(Recorded);
+        }
     Verified = std::chrono::steady_clock::now();
     if (Opts.Summary)
       for (const FunctionRun &Run : Runs)
