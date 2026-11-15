@@ -1280,8 +1280,10 @@ What an edit verifies again follows from the key:
      - Nothing
 
 A record holds proofs only. A function with a failure, an unresolved
-verdict, or a warning is verified in every run, and so, for now, is a
-proof function, whose theorem later confirmations use. What each verdict
+verdict, or a warning is verified in every run. A proof function is
+recorded without the theorem its verification makes, which only the
+confirmation of a counterexample by proof uses: a run with one to confirm
+verifies the recorded proof functions after all. What each verdict
 rests on is settled in every run from the records and the fresh verdicts
 together: a replayed proof that assumes the contract of a function that now
 fails is reported ``callee.contract``, exactly as if it had just been
