@@ -1252,7 +1252,11 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
 
   // In delayed template parsing mode, for function template we consume the
   // tokens and store them for late parsing at the end of the translation unit.
-  if (getLangOpts().DelayedTemplateParsing && Tok.isNot(tok::equal) &&
+  // CppVerify: a template's contract belongs to its definition, and its body
+  // is verified as written, so with contracts a template is parsed where it
+  // is defined on every target.
+  if (getLangOpts().DelayedTemplateParsing && !getLangOpts().VerifyContracts &&
+      Tok.isNot(tok::equal) &&
       TemplateInfo.Kind == ParsedTemplateKind::Template &&
       LateParsedAttrs->empty() && Actions.canDelayFunctionBody(D)) {
     MultiTemplateParamsArg TemplateParameterLists(*TemplateInfo.TemplateParams);
