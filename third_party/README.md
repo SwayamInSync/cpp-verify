@@ -19,6 +19,18 @@ git submodule update --init third_party/z3
 
 Z3 is built as a separate CMake project, so its internal `opt` component never clashes with LLVM's `opt` tool.
 
+### Upgrading Z3
+
+A Z3 release replaces the vendored one only through the gate in
+`clang/utils/cppverify-z3-gate`: `gate.sh BASE CANDIDATE`, with a build of each,
+solves the sequence benchmark with both Z3 binaries and verifies every Verify
+test program with both, and fails when the candidate loses a proof or a
+certified failure, or when a function is verified by one and refuted by the
+other. `.github/workflows/cppverify-z3-gate.yml` runs it every Monday for Z3's
+newest release, and by hand for any tag; `-DCPPVERIFY_Z3_SOURCE_DIR=PATH`
+builds cpp-verify with another Z3 tree. Proof-cache keys contain the exact Z3
+version, so an upgrade starts every cache afresh.
+
 ### Use system Z3 instead (optional)
 
 ```bash

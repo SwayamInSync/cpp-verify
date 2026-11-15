@@ -3034,8 +3034,11 @@ probe, and the test took the 60 s path again (the release's dry run). Over
 every test program a Clang-built and a GCC-built Z3 decided differently only
 there and in `llvm_uleb128.cpp`, where the Clang-built one proved a function
 the other did not (differential at one job, total 2501 s and 2492 s). The
-test now fails through a check any Z3 refutes at once, after a check (a
-solution of Fermat's equation for cubes) whose search ends in neither. Every
+test now fails through a check either build refutes at once, after a check (a
+solution of Fermat's equation for cubes) whose search ends in neither. A
+newer Z3 is another matter: 5.3.2 and 5.3.3 do not decide that complete query
+within the probe (4.13.4 takes 4,417 units), so the test waits for the first
+check's timeout with them, which the Z3 gate reports as a time change. Every
 probe of the test suite that an idle release build decided within 500 ms
 took at most 5.2 million units (99% of the 2622 took less than 200
 thousand); the three that took 5.2 million are those of the UTF-8 case
@@ -3608,6 +3611,17 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   `.github/workflows/cppverify-fuzz.yml`; `suite/archive_fuzzer.test` runs it
   on archives of the test programs.
 - Instrumented coverage: `scripts/coverage-verify.sh` (region target on `clang/lib/Verify`).
+- Z3 gate: `clang/utils/cppverify-z3-gate/gate.sh BASE CANDIDATE` compares
+  two builds that differ in their Z3. Stage 1 solves the sequence benchmark
+  (`seqbench.py`, from the sequence-encoding study) in the production
+  encoding (NT) and the plain sequence theory (N), and judges each claim as
+  the verifier decides it, by NT with one job and by NT or N with more, where
+  they race; stage 2 verifies every Verify test program with both at one job
+  (`differential.py`). Losing a proof or a certified failure, or a function
+  Verified by one and Failed by the other, fails the gate; gains and time
+  changes are reported. `.github/workflows/cppverify-z3-gate.yml` runs it
+  weekly for Z3's newest release.
+
 - Sanitizers: `-DCPPVERIFY_SANITIZER="address;undefined"` builds
   `clangVerify` and `cpp-verify` with AddressSanitizer and
   UndefinedBehaviorSanitizer beside an uninstrumented LLVM, Clang, and Z3,

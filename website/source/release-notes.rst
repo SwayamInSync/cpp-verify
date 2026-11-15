@@ -1047,6 +1047,18 @@ misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**Z3 releases pass a gate.** A Z3 release replaces the built-in one only when
+cpp-verify built with it loses nothing that 4.13.4 decides: no proof of a
+valid claim or model of a false one in the sequence benchmark, as the
+verifier poses them, and no proof or certified failure of any Verify test
+program, with no function Verified by one and Failed by the other
+(``clang/utils/cppverify-z3-gate``). CI runs the gate every week for Z3's
+newest release. 0.2 keeps Z3 4.13.4: 5.3.3, the newest, gains a proof in the
+benchmark and loses none there, but on the test programs it loses two proofs
+(``even_mod`` and ``count_reverse`` end ``spec.fuel``), as 4.16.0, 5.1.0, and
+5.3.2 did, and it is slower where 4.13.4 refutes a function's complete query
+at once (``certified_failure_attribution.cpp`` takes 31 s instead of 2 s).
+
 **A Clang build in CI.** Linux CI built only with GCC, which accepts C++20
 features in C++17 code without a word, while Apple Clang rejects some of
 them: before 0.1.0, such code and code whose result depended on the order of

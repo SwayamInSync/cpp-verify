@@ -8,10 +8,10 @@
 // complete query's probe, so the second check is reported well within 40 s,
 // where waiting for the first takes the 60 s timeout.
 //
-// Any build of Z3 refutes a < 0 at once and none settles the cubes. The test
-// used to fail a postcondition whose own query does not end and which the
-// complete query refuted within the probe only with a Z3 built by GCC: with
-// one built by Clang, as the release's is, it took the 60 s path.
+// Any build of Z3 4.13.4 refutes a < 0 at once and none settles the cubes.
+// The test used to fail a postcondition whose own query does not end and
+// which the complete query refuted within the probe only with a Z3 built by
+// GCC: with one built by Clang, as the release's is, it took the 60 s path.
 
 void cubes(int a, int b, int c)
   cppverify::pre(0 < a && a < 1000 && 0 < b && b < 1000 && 0 < c && c < 1000)
