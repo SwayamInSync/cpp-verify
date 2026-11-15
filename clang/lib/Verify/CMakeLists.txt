@@ -94,6 +94,15 @@ add_clang_library(clangVerify
 
 target_link_libraries(clangVerify PRIVATE ${CPPVERIFY_Z3_TARGET})
 
+# GCC accepts C++20 extensions in C++17 code without a word; Apple Clang
+# rejects some of them, so a build with Clang makes them errors.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(clangVerify PRIVATE -Werror=c++20-extensions)
+  if(TARGET obj.clangVerify)
+    target_compile_options(obj.clangVerify PRIVATE -Werror=c++20-extensions)
+  endif()
+endif()
+
 get_property(_cppverify_z3_origin GLOBAL PROPERTY CPPVERIFY_Z3_ORIGIN)
 set_property(SOURCE Driver/CppVerifyVersion.cpp APPEND PROPERTY COMPILE_DEFINITIONS
   CPPVERIFY_Z3_ORIGIN="${_cppverify_z3_origin}")

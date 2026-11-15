@@ -1029,6 +1029,15 @@ misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**A Clang build in CI.** Linux CI built only with GCC, which accepts C++20
+features in C++17 code without a word, while Apple Clang rejects some of
+them: before 0.1.0, such code and code whose result depended on the order of
+evaluation failed 53 tests on macOS. The Linux assertions build now uses Clang
+18, which makes a C++20 extension in the verifier an error
+(``-Werror=c++20-extensions``), and checks the verifier with clang-tidy for a
+use after a move (``bugprone-use-after-move``). It found seven lambdas that
+captured structured bindings, now named variables, and no use after a move.
+
 **cvc5 and Lean on macOS.** macOS CI installed neither, so the 36 tests that
 need cvc5 or Lean and run outside Linux, the backend fidelity gate among them,
 ran only on Linux. They now run on macOS too, with cvc5 1.4.2 and the pinned

@@ -176,7 +176,9 @@ private:
     std::map<std::string, uint64_t> Moved;
     assignedPointers(W.Body, Moved);
     const SourceLocation Loc = W.Loc;
-    for (const auto &[Name, Stride] : Moved) {
+    for (const auto &Entry : Moved) {
+      const std::string &Name = Entry.first;
+      const uint64_t Stride = Entry.second;
       const VType Pointer = VType::makePtr(Stride);
       auto remainder = [&](std::unique_ptr<VExpr> P) {
         return std::make_unique<VBinOpExpr>(
