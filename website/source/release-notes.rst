@@ -1047,6 +1047,15 @@ misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
 
+**A Clang build in CI.** Linux CI built only with GCC, which accepts C++20
+features in C++17 code without a word, while Apple Clang rejects some of
+them: before 0.1.0, such code and code whose result depended on the order of
+evaluation failed 53 tests on macOS. The Linux assertions build now uses Clang
+18, which makes a C++20 extension in the verifier an error
+(``-Werror=c++20-extensions``), and checks the verifier with clang-tidy for a
+use after a move (``bugprone-use-after-move``). It found seven lambdas that
+captured structured bindings, now named variables, and no use after a move.
+
 **cvc5 and Lean on macOS.** macOS CI installed neither, so the 36 tests that
 need cvc5 or Lean and run outside Linux, the backend fidelity gate among them,
 ran only on Linux. They now run on macOS too, with cvc5 1.4.2 and the pinned
@@ -1100,6 +1109,15 @@ configured. A ThreadSanitizer build checks at configure time that the C++
 library can compile Z3's timed wait, which libstdc++ 14.1 to 14.3 and 15.1 to
 15.2 cannot under TSan (GCC PR 121496), and says how to select another
 (:doc:`language/tooling`).
+
+**Releases built by their own Clang.** Each release archive was built by its
+runner's host compiler, GCC on Linux and Apple Clang on macOS, so the two
+platforms' binaries came from different compilers; before 0.1.0 that
+difference showed as 53 failing tests on macOS, where the verifier depended
+on the order in which arguments are evaluated. A release is now built in two
+stages (``.github/workflows/cppverify-release-build.sh``): the host compiler
+builds Clang, and that Clang builds the distribution, the built-in Z3
+included, on both platforms.
 
 Data formats
 ~~~~~~~~~~~~
