@@ -1354,7 +1354,8 @@ JSON Lines
 per result, and the run ends with one ``cppverify.summary/1`` record, the
 counts of the text summary by name (``verified``, ``failed``,
 ``unresolved`` with its ``reasons``, ``bounded_safe``, ``trusted``,
-``lowered``, ``exported``, ``interrupted``). No record holds a time, so a
+``lowered``, ``exported``, ``interrupted``), and ``reused``, the functions
+read from the proof cache. No record holds a time, so a
 run's records are the same at any ``--jobs``; ``--time-report`` adds
 ``cppverify.time/1`` records. A record has:
 
