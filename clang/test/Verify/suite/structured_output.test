@@ -30,7 +30,7 @@ JSON-SAME: "text":"returns {{-?[0-9]+}}"
 JSON-NEXT: "function":"never"{{.*}}"status":"verified","vacuous":true}
 JSON-NEXT: {"function":"never","function_source":{"column":5,"end_column":10,"end_line":18,"file":"{{.*}}structured_output.cpp","line":18},"message":"never: the precondition is unsatisfiable, so every claim about it holds vacuously","schema":"cppverify.diagnostic/2","severity":"warning","status":"warning"}
 The run ends with its counts.
-JSON-NEXT: {"bounded_safe":0,"exported":0,"failed":1,"interrupted":0,"lowered":0,"reasons":{},"schema":"cppverify.summary/1","trusted":0,"unresolved":0,"verified":2}
+JSON-NEXT: {"bounded_safe":0,"exported":0,"failed":1,"interrupted":0,"lowered":0,"reasons":{},"reused":0,"schema":"cppverify.summary/1","trusted":0,"unresolved":0,"verified":2}
 JSON-NOT: {{.}}
 
 SARIF:      "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",

@@ -553,6 +553,27 @@ statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**Proved functions are not verified again.** The proof cache kept proofs of
+single obligations, and looked them up after lowering a function, which for
+many functions is most of the time: a second run of the suite's
+``safe_fib.cpp`` took 5.4 s of the first run's 5.8 s. With the Z3 backend,
+``--proof-cache`` (``-fverify-cache``) now also records each function all of
+whose verdicts are proofs, under a key of everything its verification read:
+the function, the contracts of the functions it calls, the specs it applies
+with their bodies, the records it uses, the options that change what is
+proved, and the build of the verifier and of Z3. A run that makes the same
+key reads the record before it lowers anything: the second run takes 0.05 s.
+Moving code, comments, and edits to other functions leave a record valid; an
+edit to a callee's body verifies the callee again and not its callers. What
+each verdict rests on is still settled in every run, so a recorded proof is
+demoted when a contract it assumes fails. A verdict unresolved for want of
+time is recorded as well, with its limits and with where the function is: a
+run with no larger limit and nothing moved reads it in place of waiting the
+limit out again, and says so in a note. Failures and other unresolved
+verdicts are verified every run. ``--proof-cache-check`` verifies all
+the same and reports a record that differs. See *Functions the proof cache
+replays* in the tooling reference.
+
 **Source lookups from parallel failures.** With more than one job, a failure
 whose counterexample passes through a loop gets notes from unrolling the
 loop, and those looked up source lines without the lock that the other
@@ -1037,6 +1058,18 @@ on boundary values and samples. CI fails when a ``Verified`` function
 misbehaves on an input its precondition admits, when a counterexample does not
 reproduce, or when two backends decide differently
 (:doc:`book/part-ii/ch17-backends-modular-calls`).
+
+**Z3 releases pass a gate.** A Z3 release replaces the built-in one only when
+cpp-verify built with it loses nothing that 4.13.4 decides: no proof of a
+valid claim or model of a false one in the sequence benchmark, as the
+verifier poses them, and no proof or certified failure of any Verify test
+program, with no function Verified by one and Failed by the other
+(``clang/utils/cppverify-z3-gate``). CI runs the gate every week for Z3's
+newest release. 0.2 keeps Z3 4.13.4: 5.3.3, the newest, gains a proof in the
+benchmark and loses none there, but on the test programs it loses two proofs
+(``even_mod`` and ``count_reverse`` end ``spec.fuel``), as 4.16.0, 5.1.0, and
+5.3.2 did, and it is slower where 4.13.4 refutes a function's complete query
+at once (``certified_failure_attribution.cpp`` takes 31 s instead of 2 s).
 
 **A Clang build in CI.** Linux CI built only with GCC, which accepts C++20
 features in C++17 code without a word, while Apple Clang rejects some of

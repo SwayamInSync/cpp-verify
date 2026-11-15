@@ -54,6 +54,8 @@ struct VerifySummary {
   unsigned Lowered = 0;
   unsigned Exported = 0;
   unsigned Interrupted = 0;
+  /// Functions whose verdicts the run read from the proof cache.
+  unsigned Reused = 0;
   /// The reason code of each unresolved verdict, counted.
   std::map<std::string, unsigned> Reasons;
 };
@@ -108,6 +110,9 @@ struct VerifyOptions {
   std::string ProofCachePath;
   uint64_t ProofCacheMaxBytes = 1024ULL * 1024ULL * 1024ULL;
   uint64_t ProofCacheMaxEntries = 100000;
+  /// Verify a function the proof cache has a record of all the same, and
+  /// report a record that differs from what its verification establishes.
+  bool ProofCacheCheck = false;
   /// Check every memory access and pointer step against the object it may
   /// address: a parameter's declared valid(p, n) extent or its single
   /// pointee. Core expression definedness checks are always emitted during

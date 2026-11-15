@@ -8,6 +8,7 @@ add_distinct_clang_unittest(VerifyTests
   CertifyTest.cpp
   CompilationOptionsTest.cpp
   EncodingParityTest.cpp
+  FunctionDigestTest.cpp
   MachineIntegerEncodingTest.cpp
   ObligationValidationTest.cpp
   ThreadCpuTimeTest.cpp

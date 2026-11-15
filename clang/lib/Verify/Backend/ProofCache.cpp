@@ -76,41 +76,54 @@ std::string ProofCache::entryPath(llvm::StringRef Contents) const {
   return Path.str().str();
 }
 
-ProofCacheLookup ProofCache::lookup(llvm::StringRef SemanticHash) const {
+std::string ProofCache::recordHeader(llvm::StringRef Key) const {
+  return "cppverify.function-results/1\nidentity=" + BackendIdentity +
+         "\nkey=sha256:" + Key.str() + "\n";
+}
+
+ProofCacheRecord ProofCache::readEntry(llvm::StringRef Header) const {
   if (!enabled())
     return {};
   if (!InitializationError.empty())
-    return {ProofCacheLookupKind::IOFailure, InitializationError};
+    return {ProofCacheLookupKind::IOFailure, InitializationError, {}};
 
-  const std::string Expected = entryContents(SemanticHash);
-  auto Buffer = llvm::MemoryBuffer::getFile(entryPath(Expected));
+  auto Buffer = llvm::MemoryBuffer::getFile(entryPath(Header));
   if (!Buffer) {
     if (Buffer.getError() == std::errc::no_such_file_or_directory)
       return {};
     return {ProofCacheLookupKind::IOFailure,
-            "cannot read proof cache entry: " + Buffer.getError().message()};
+            "cannot read proof cache entry: " + Buffer.getError().message(),
+            {}};
   }
-  if ((*Buffer)->getBuffer() != Expected)
+  llvm::StringRef Contents = (*Buffer)->getBuffer();
+  if (!Contents.consume_front(Header))
     return {ProofCacheLookupKind::Corrupt,
-            "corrupt or incompatible proof cache entry"};
-  return {ProofCacheLookupKind::Hit, {}};
+            "corrupt or incompatible proof cache entry",
+            {}};
+  return {ProofCacheLookupKind::Hit, {}, Contents.str()};
 }
 
-llvm::Error ProofCache::store(llvm::StringRef SemanticHash) const {
+llvm::Error ProofCache::installEntry(llvm::StringRef Header,
+                                     llvm::StringRef Body,
+                                     bool Replace) const {
   if (!enabled())
     return llvm::Error::success();
   if (!InitializationError.empty())
     return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                    InitializationError.c_str());
 
-  const std::string Contents = entryContents(SemanticHash);
-  const std::string Path = entryPath(Contents);
+  const std::string Contents = (Header + Body).str();
+  const std::string Path = entryPath(Header);
+  // An entry is immutable: the first one installed for a header stays.
   if (llvm::sys::fs::exists(Path)) {
-    ProofCacheLookup Existing = lookup(SemanticHash);
-    if (Existing.Kind == ProofCacheLookupKind::Hit)
+    ProofCacheRecord Existing = readEntry(Header);
+    if (Existing.Kind == ProofCacheLookupKind::Hit &&
+        !(Replace && Existing.Payload != Body))
       return llvm::Error::success();
-    if (Existing.Kind == ProofCacheLookupKind::Corrupt ||
-        Existing.Kind == ProofCacheLookupKind::IOFailure)
+    if (Replace)
+      llvm::sys::fs::remove(Path);
+    else if (Existing.Kind == ProofCacheLookupKind::Corrupt ||
+             Existing.Kind == ProofCacheLookupKind::IOFailure)
       return llvm::createStringError(llvm::inconvertibleErrorCode(), "%s",
                                      Existing.Message.c_str());
   }
@@ -135,8 +148,7 @@ llvm::Error ProofCache::store(llvm::StringRef SemanticHash) const {
     }
     if (llvm::Error Error = Temp->keep(Path)) {
       // A concurrent process may have installed the same immutable entry.
-      ProofCacheLookup Existing = lookup(SemanticHash);
-      if (Existing.Kind == ProofCacheLookupKind::Hit) {
+      if (readEntry(Header).Kind == ProofCacheLookupKind::Hit) {
         llvm::consumeError(std::move(Error));
         return llvm::Error::success();
       }
@@ -157,6 +169,41 @@ llvm::Error ProofCache::store(llvm::StringRef SemanticHash) const {
   if (llvm::Error PruneError = pruneImpl(Contents.size(), 1, true))
     return llvm::joinErrors(llvm::errorCodeToError(EC), std::move(PruneError));
   return Install();
+}
+
+ProofCacheLookup ProofCache::lookup(llvm::StringRef SemanticHash) const {
+  ProofCacheRecord Entry = readEntry(entryContents(SemanticHash));
+  if (Entry.Kind == ProofCacheLookupKind::Hit && !Entry.Payload.empty())
+    return {ProofCacheLookupKind::Corrupt,
+            "corrupt or incompatible proof cache entry"};
+  return {Entry.Kind, std::move(Entry.Message)};
+}
+
+llvm::Error ProofCache::store(llvm::StringRef SemanticHash) const {
+  return installEntry(entryContents(SemanticHash), {});
+}
+
+ProofCacheRecord ProofCache::lookupRecord(llvm::StringRef Key) const {
+  ProofCacheRecord Entry = readEntry(recordHeader(Key));
+  if (Entry.Kind != ProofCacheLookupKind::Hit)
+    return Entry;
+  llvm::StringRef Rest = Entry.Payload;
+  const auto [Sum, Payload] = Rest.split('\n');
+  if (Sum != "payload-sha256=" + digest(Payload))
+    return {ProofCacheLookupKind::Corrupt,
+            "corrupt or incompatible proof cache entry",
+            {}};
+  return {ProofCacheLookupKind::Hit, {}, Payload.str()};
+}
+
+llvm::Error ProofCache::storeRecord(llvm::StringRef Key,
+                                    llvm::StringRef Payload) const {
+  // A record that does not read back as written is replaced: nothing else
+  // would ever repair it.
+  return installEntry(recordHeader(Key),
+                      "payload-sha256=" + digest(Payload) + "\n" +
+                          Payload.str(),
+                      /*Replace=*/true);
 }
 
 llvm::Error ProofCache::pruneImpl(uint64_t ReserveBytes,

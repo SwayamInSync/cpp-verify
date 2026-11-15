@@ -150,8 +150,12 @@ Other flags
   ``solver.memory-limit``)
 - ``cpp-verify --jobs=N`` — solver workers shared by all functions (default
   the available physical cores, or ``CPPVERIFY_JOBS``; 1 for ``--backend=lean``)
-- ``cpp-verify --proof-cache=DIR`` — keep proofs of single obligations between
-  runs (``--proof-cache-max-mb``, ``--proof-cache-max-entries`` bound it)
+- ``cpp-verify --proof-cache=DIR`` — keep proofs between runs: of single
+  obligations, and of whole functions, which a later run does not verify
+  again while nothing they depend on has changed
+  (``--proof-cache-max-mb``, ``--proof-cache-max-entries`` bound it;
+  ``--proof-cache-check`` verifies all the same and reports a record that
+  differs from the verification)
 - ``cpp-verify --diagnostics-format=json`` — emit versioned
   ``cppverify.diagnostic/2`` JSON Lines for results and compiler diagnostics,
   ending with a summary record; ``sarif`` prints one SARIF 2.1.0 log, and

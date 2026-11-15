@@ -769,6 +769,15 @@ Backends
        Standalone cvc5 does not use this cache. Failed,
        unresolved, and bounded-safe results are never proof-cache entries.
        Corrupt or incompatible entries are rejected rather than treated as hits.
+       With the Z3 backend, a function all of whose verdicts are proofs is
+       also recorded whole, and a later run that reads the same of the
+       program does not verify it again: see `Functions the proof cache
+       replays`_.
+   * - ``--proof-cache-check``
+     - Verify every function the proof cache has a record of all the same, and
+       report ``the proof cache's record of f differs from its verification``
+       for a record that is not what the verification establishes. For
+       testing the cache; requires ``--proof-cache``.
    * - ``--proof-cache-max-mb=N``
      - Bound proof-cache storage in MiB (default 1024; ``0`` disables the byte
        limit). Requires ``--proof-cache``.
@@ -1241,6 +1250,112 @@ memoization store, not a portable proof certificate: do not share a cache
 directory with untrusted writers. Use Lean certification when independent
 kernel checking is required.
 
+Functions the proof cache replays
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Solving is not all a run does: before any query there is the lowering of
+the function to its obligations, which for a function with a long body or
+deep specifications takes longer than the solver. So with the Z3 backend
+the proof cache also records functions. When every verdict of a function is
+a proof, the run writes one record of them, under a key of everything the
+function's verification read:
+
+- the function itself, as the verifier converted it, without its positions
+  in the source;
+- of every function it calls, the contract, and what the verifier inferred
+  from the body for callers (whether it may write memory, whether it keeps
+  an address it is passed, where a pointer it returns comes from), but not
+  the body;
+- every spec it applies, reveals, or hides, with its body, and the specs
+  and functions those name in turn;
+- the records and enumerations it uses, with their layouts on the target;
+- the options that change what is proved (``--int-encoding``,
+  ``--no-check-ub``, ``--max-failures``, ``--verbose``, and the like), and
+  the exact build of ``cpp-verify`` and of Z3.
+
+A later run that makes the same key reads the record instead of lowering
+and solving. The limits (``--timeout``, ``--function-timeout``,
+``--memory-limit``, ``--jobs``) are not in the key, since a proof holds
+under any.
+
+.. code-block:: console
+
+   $ cpp-verify --proof-cache=.cppverify-cache safe_fib.cpp
+   ...
+   Summary: 7 verified, 1 failed in 5.7 s
+   $ cpp-verify --proof-cache=.cppverify-cache safe_fib.cpp
+   ...
+   Summary: 7 verified, 1 failed, 3 reused from the proof cache in 0.0 s
+
+The summary counts the functions replayed, ``--time-report`` marks each of
+them ``(proof cache)`` (``"proof_cache": true`` in its JSON records), and a
+replayed verdict shows every query as answered, ``[cache=27/27]``.
+
+What an edit verifies again follows from the key:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Edit
+     - Verified again
+   * - Code moved in the file, comments, blank lines, a function added
+     - Nothing recorded (the added function is verified)
+   * - The body of a function
+     - That function; its callers only if what callers read of the body
+       changed
+   * - The contract of a function
+     - That function and every function that calls it
+   * - The body of a spec
+     - Every function whose contract or body applies it, directly or
+       through another spec
+   * - A field added to a record, an enumerator, a constant
+     - The functions that use it
+   * - ``--int-encoding``, ``--no-check-ub``, a new ``cpp-verify`` or Z3
+     - Everything
+   * - ``--timeout``, ``--jobs``, ``--time-report``
+     - Nothing
+
+A record holds proofs, with one exception below. A function with a
+failure, a warning, or a verdict unresolved for another reason than time is
+verified in every run. A proof function is
+recorded without the theorem its verification makes, which only the
+confirmation of a counterexample by proof uses: a run with one to confirm
+verifies the recorded proof functions after all. What each verdict
+rests on is settled in every run from the records and the fresh verdicts
+together: a replayed proof that assumes the contract of a function that now
+fails is reported ``callee.contract``, exactly as if it had just been
+proved.
+
+A verdict ``Unresolved`` with ``solver.timeout`` costs every run its whole
+limit, so it is recorded too, with the limits it was reached under
+(``--timeout``, the limit for collections, ``--function-timeout``) and with
+where the function and everything it names is in the source, since the
+verdict names those places. A run reads it when none of its limits is
+larger and nothing has moved, and says so:
+
+.. code-block:: console
+
+   $ cpp-verify --timeout=1500 --proof-cache=.cppverify-cache loop.cpp
+   loop.cpp:8:3: Unresolved: matching_loop [backend=z3] [cache=0/2] [reason=solver.timeout] (proof obligation ...::assertion@8:3: timeout)
+   Summary: 2 verified, 1 unresolved (solver.timeout 1) in 3.1 s
+   $ cpp-verify --timeout=1500 --proof-cache=.cppverify-cache loop.cpp
+   loop.cpp:8:3: Unresolved: matching_loop [backend=z3] [cache=2/2] [reason=solver.timeout] (proof obligation ...::assertion@8:3: timeout)
+   note: this verdict is the proof cache's record of a run with --timeout=1500; a larger limit, or a change to the function, verifies it again
+   Summary: 2 verified, 1 unresolved (solver.timeout 1), 2 reused from the proof cache in 0.0 s
+
+A larger limit (or none) verifies again and replaces the record, and so
+does any edit that moves the function or what it names. A timeout depends
+on the machine and its load, so a recorded one may be a proof on a quieter
+day: raise the limit, or remove the cache directory, to try again.
+
+Runs that write something of each function do not use records: the dumps
+(``--dump-ir``, ``--dump-smt2`` is unaffected since nothing is solved),
+``--lower-only``, ``--obligation-out``, ``--profile-quantifiers``, every
+Lean mode, the other backends, and a run over several files that settles
+contracts across them. A record that does not read back as it was written
+is ignored and written again.
+
 Structured diagnostics
 ----------------------
 
@@ -1276,7 +1391,8 @@ JSON Lines
 per result, and the run ends with one ``cppverify.summary/1`` record, the
 counts of the text summary by name (``verified``, ``failed``,
 ``unresolved`` with its ``reasons``, ``bounded_safe``, ``trusted``,
-``lowered``, ``exported``, ``interrupted``). No record holds a time, so a
+``lowered``, ``exported``, ``interrupted``), and ``reused``, the functions
+read from the proof cache. No record holds a time, so a
 run's records are the same at any ``--jobs``; ``--time-report`` adds
 ``cppverify.time/1`` records. A record has:
 
@@ -1743,7 +1859,7 @@ given to:
    * - ``-fverify-cache=<dir>``
      - Proofs kept in ``<dir>`` (``--proof-cache``), shared by every
        compilation that names it, so an unchanged obligation is not solved
-       again.
+       again and an unchanged proved function is not verified again.
    * - ``-fverify-report``, ``-fverify-report=<file>``
      - The results as JSON Lines records (``--diagnostics-format=json``),
        ending with the summary record, in ``<object>.cppverify.json`` beside

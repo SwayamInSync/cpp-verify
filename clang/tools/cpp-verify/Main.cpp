@@ -238,6 +238,12 @@ static cl::opt<std::string> ProofCache(
     cl::desc("Cache successful dependency-scoped proofs in this directory"),
     cl::value_desc("directory"), cl::cat(CppVerifyCategory));
 
+static cl::opt<bool> ProofCacheCheck(
+    "proof-cache-check",
+    cl::desc("Verify every function the proof cache has a record of all the "
+             "same, and report a record that differs from the verification"),
+    cl::cat(CppVerifyCategory));
+
 static cl::opt<uint64_t> ProofCacheMaxMB(
     "proof-cache-max-mb",
     cl::desc("Maximum proof-cache size in MiB (0 = no byte limit)"),
@@ -415,6 +421,7 @@ static void printSummary(std::chrono::steady_clock::time_point Start) {
   add(gSummary.Lowered, "lowered");
   add(gSummary.Exported, "exported");
   add(gSummary.Interrupted, "interrupted");
+  add(gSummary.Reused, "reused from the proof cache");
   const double Seconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - Start)
           .count();
@@ -573,6 +580,7 @@ public:
       VOpts.ProofCachePath = ProofCache.getValue();
       VOpts.ProofCacheMaxBytes = proofCacheMaxBytes();
       VOpts.ProofCacheMaxEntries = ProofCacheMaxEntries.getValue();
+      VOpts.ProofCacheCheck = ProofCacheCheck.getValue();
       VOpts.CheckUB = CheckUB.getValue() && !NoCheckUB.getValue();
       VOpts.ProfileQuantifiers = ProfileQuantifiers.getValue();
       VOpts.Diagnostics = verifierFormat();

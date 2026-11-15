@@ -18,6 +18,14 @@ struct ProofCacheLookup {
   std::string Message;
 };
 
+/// A record a run stored under a key: what one function's verification
+/// established.
+struct ProofCacheRecord {
+  ProofCacheLookupKind Kind = ProofCacheLookupKind::Miss;
+  std::string Message;
+  std::string Payload;
+};
+
 /// Stores only successful proof verdicts. Cache entries bind a dependency-
 /// scoped semantic hash to the exact backend adapter and solver version.
 class ProofCache {
@@ -29,6 +37,10 @@ class ProofCache {
 
   std::string entryContents(llvm::StringRef SemanticHash) const;
   std::string entryPath(llvm::StringRef Contents) const;
+  std::string recordHeader(llvm::StringRef Key) const;
+  ProofCacheRecord readEntry(llvm::StringRef Header) const;
+  llvm::Error installEntry(llvm::StringRef Header, llvm::StringRef Body,
+                           bool Replace = false) const;
   llvm::Error pruneImpl(uint64_t ReserveBytes, uint64_t ReserveEntries,
                         bool EvictOne) const;
 
@@ -39,6 +51,9 @@ public:
   bool enabled() const { return !Root.empty(); }
   ProofCacheLookup lookup(llvm::StringRef SemanticHash) const;
   llvm::Error store(llvm::StringRef SemanticHash) const;
+  /// A record with its payload, which its checksum guards.
+  ProofCacheRecord lookupRecord(llvm::StringRef Key) const;
+  llvm::Error storeRecord(llvm::StringRef Key, llvm::StringRef Payload) const;
   llvm::Error prune() const;
 };
 

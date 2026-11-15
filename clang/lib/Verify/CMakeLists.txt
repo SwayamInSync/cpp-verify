@@ -45,6 +45,7 @@ get_property(_cppverify_z3_ep GLOBAL PROPERTY CPPVERIFY_Z3_EP_TARGET)
 add_clang_library(clangVerify
   IR/VExpr.cpp
   IR/VStmt.cpp
+  IR/VHash.cpp
   IR/NodeBudget.cpp
   Frontend/ASTConverter.cpp
   Transform/Passivize.cpp

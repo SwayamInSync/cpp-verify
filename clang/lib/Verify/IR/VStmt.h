@@ -479,6 +479,20 @@ struct VFunction {
   /// field): each has companions `name.__lo` and `name.__hi`, the bytes it
   /// may address, which every access and step through it must stay in.
   std::set<std::string> BoundedPointers;
+  /// Parameters through which a caller may lend a local or dynamic object,
+  /// a scalar or a record: neither the function nor what it calls keeps,
+  /// offsets, or frees an address derived from them. Inferred from the
+  /// bodies of the whole program before any function is verified, so the
+  /// verification of a caller reads no body but its own.
+  std::set<std::string> LendableScalarParams;
+  std::set<std::string> LendableRecordParams;
+  /// Whether the body, or one it reaches through calls, may write memory.
+  /// Inferred like the lendable parameters.
+  bool MayWriteHeap = false;
+  /// The variables whose value a pointer the body returns may be, when every
+  /// pointer it returns is null or one of them; nothing when it may return
+  /// another pointer. Inferred like the lendable parameters.
+  std::optional<std::set<std::string>> ReturnedPointers;
   std::vector<std::pair<std::string, VType>> ReturnFields;
   /// Number of leading preconditions originating from explicit pre clauses.
   unsigned ExplicitPreconditionCount = 0;
