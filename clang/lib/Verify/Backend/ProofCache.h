@@ -39,7 +39,8 @@ class ProofCache {
   std::string entryPath(llvm::StringRef Contents) const;
   std::string recordHeader(llvm::StringRef Key) const;
   ProofCacheRecord readEntry(llvm::StringRef Header) const;
-  llvm::Error installEntry(llvm::StringRef Header, llvm::StringRef Body) const;
+  llvm::Error installEntry(llvm::StringRef Header, llvm::StringRef Body,
+                           bool Replace = false) const;
   llvm::Error pruneImpl(uint64_t ReserveBytes, uint64_t ReserveEntries,
                         bool EvictOne) const;
 
