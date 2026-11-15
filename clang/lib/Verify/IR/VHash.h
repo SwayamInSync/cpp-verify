@@ -9,6 +9,7 @@
 #define LLVM_CLANG_VERIFY_IR_VHASH_H
 
 #include "VStmt.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include <set>
 #include <string>
 
@@ -37,8 +38,11 @@ struct VFunctionDigest {
   std::set<std::string> References;
 };
 
-VFunctionDigest digestVFunction(const VFunction &Fn,
-                                VDigestScope Scope = VDigestScope::Whole);
+/// With \p Place, the digest also covers where everything is: what
+/// \p Place gives for each position that is there.
+VFunctionDigest
+digestVFunction(const VFunction &Fn, VDigestScope Scope = VDigestScope::Whole,
+                llvm::function_ref<std::string(SourceLocation)> Place = nullptr);
 
 } // namespace verify
 } // namespace clang
