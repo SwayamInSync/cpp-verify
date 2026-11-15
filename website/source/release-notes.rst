@@ -557,8 +557,8 @@ key reads the record before it lowers anything: the second run takes 0.05 s.
 Moving code, comments, and edits to other functions leave a record valid; an
 edit to a callee's body verifies the callee again and not its callers. What
 each verdict rests on is still settled in every run, so a recorded proof is
-demoted when a contract it assumes fails. Failures, unresolved verdicts, and
-proof functions are verified every run. ``--proof-cache-check`` verifies all
+demoted when a contract it assumes fails. Failures and unresolved verdicts
+are verified every run. ``--proof-cache-check`` verifies all
 the same and reports a record that differs. See *Functions the proof cache
 replays* in the tooling reference.
 
