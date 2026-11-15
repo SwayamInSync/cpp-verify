@@ -72,10 +72,12 @@ class Digest {
   llvm::SHA256 Hash;
   std::set<std::string> &References;
   VDigestScope Scope;
+  llvm::function_ref<std::string(SourceLocation)> Place;
 
 public:
-  Digest(std::set<std::string> &References, VDigestScope Scope)
-      : References(References), Scope(Scope) {}
+  Digest(std::set<std::string> &References, VDigestScope Scope,
+         llvm::function_ref<std::string(SourceLocation)> Place)
+      : References(References), Scope(Scope), Place(Place) {}
 
   std::string result() {
     return llvm::toHex(Hash.final(), /*LowerCase=*/true);
@@ -91,8 +93,12 @@ public:
     number(Value.size());
     Hash.update(Value);
   }
-  /// A position is not written, only whether there is one.
-  void present(SourceLocation Loc) { flag(Loc.isValid()); }
+  /// Whether there is a position, and with Place where it is.
+  void present(SourceLocation Loc) {
+    flag(Loc.isValid());
+    if (Place && Loc.isValid())
+      text(Place(Loc));
+  }
   void present(SourceRange Range) {
     present(Range.getBegin());
     present(Range.getEnd());
@@ -690,10 +696,11 @@ public:
 
 } // namespace
 
-VFunctionDigest verify::digestVFunction(const VFunction &Fn,
-                                        VDigestScope Scope) {
+VFunctionDigest verify::digestVFunction(
+    const VFunction &Fn, VDigestScope Scope,
+    llvm::function_ref<std::string(SourceLocation)> Place) {
   VFunctionDigest Result;
-  Digest D(Result.References, Scope);
+  Digest D(Result.References, Scope, Place);
   D.function(Fn);
   Result.Hash = D.result();
   return Result;

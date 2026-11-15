@@ -3020,7 +3020,7 @@ struct RecordReader {
 };
 
 /// Bumped whenever what a record holds, or how a key is made, changes.
-constexpr unsigned ResultRecordVersion = 1;
+constexpr unsigned ResultRecordVersion = 3;
 
 /// The options a function's verdicts depend on, as part of the key of its
 /// record; nothing for a run whose verifications are not recorded. A proof
@@ -3672,11 +3672,33 @@ public:
       std::set<std::string> References;
       /// The digests of both.
       std::string Hash;
+      /// The digests of both with where everything in them is.
+      std::string Places;
     };
     std::vector<std::unique_ptr<VFunction>> Contracts;
     std::map<std::string, VisibleFunction> Visible;
     std::vector<std::set<std::string>> OwnReferences(Functions.size());
     std::vector<std::string> OwnHash(Functions.size());
+    std::vector<std::string> OwnPlaces(Functions.size());
+    // A position as a file and an offset in it; one inside a macro has no
+    // place a later run could find again.
+    auto placeOf = [&](SourceLocation Loc)
+        -> std::optional<std::pair<std::string, unsigned>> {
+      std::lock_guard<std::recursive_mutex> Guard(SourceLock);
+      const SourceManager &SM = Ctx.getSourceManager();
+      if (Loc.isInvalid() || Loc.isMacroID())
+        return std::nullopt;
+      const auto [File, Offset] = SM.getDecomposedLoc(Loc);
+      const OptionalFileEntryRef Entry = SM.getFileEntryRefForID(File);
+      if (!Entry)
+        return std::nullopt;
+      return std::make_pair(Entry->getName().str(), Offset);
+    };
+    auto placeText = [&](SourceLocation Loc) {
+      const auto Place = placeOf(Loc);
+      return Place ? Place->first + ":" + std::to_string(Place->second)
+                   : std::string("?");
+    };
     for (size_t I = 0; I != Functions.size(); ++I) {
       const VFunction &Fn = *Functions[I];
       const VFunction &Interface = *InterfaceFunctions[I];
@@ -3684,6 +3706,8 @@ public:
         VFunctionDigest Digest = digestVFunction(*Whole);
         OwnReferences[I].merge(Digest.References);
         OwnHash[I] += Digest.Hash;
+        OwnPlaces[I] +=
+            digestVFunction(*Whole, VDigestScope::Whole, placeText).Hash;
       }
       VisibleFunction &Seen = Visible[Fn.Identity];
       if (Fn.IsSpec) {
@@ -3691,6 +3715,7 @@ public:
         Seen.Interface = &Interface;
         Seen.References = OwnReferences[I];
         Seen.Hash = OwnHash[I];
+        Seen.Places = OwnPlaces[I];
         continue;
       }
       for (const VFunction *Whole : {&Fn, &Interface}) {
@@ -3702,6 +3727,9 @@ public:
             digestVFunction(*Contract, VDigestScope::Interface);
         Seen.References.merge(Digest.References);
         Seen.Hash += Digest.Hash;
+        Seen.Places +=
+            digestVFunction(*Contract, VDigestScope::Interface, placeText)
+                .Hash;
         (Whole == &Fn ? Seen.Function : Seen.Interface) = Contract.get();
         Contracts.push_back(std::move(Contract));
       }
@@ -3962,6 +3990,10 @@ public:
       uint64_t Confirmed = 0;
       /// Read from the proof cache, not verified by this run.
       bool Reused = false;
+      /// For a run read from the proof cache: the function is a proof
+      /// function whose verification made a theorem (Contract), which a
+      /// record does not hold.
+      bool TheoremUnread = false;
     };
     std::vector<FunctionRun> Runs(Functions.size());
 
@@ -3997,21 +4029,74 @@ public:
           llvm::SHA256::hash(llvm::arrayRefFromStringRef(Key.Out)),
           /*LowerCase=*/true);
     };
+    // Where the function and everything in its scope is: a verdict that
+    // names places in the source is recorded with this, and read only by a
+    // run in which none of them has moved.
+    auto placesOf = [&](size_t Index) {
+      const FunctionScope Scope = scopeOf(Index);
+      const std::string &Self = Functions[Index]->Identity;
+      RecordWriter Places;
+      Places.text(OwnPlaces[Index]);
+      for (const auto &[Identity, Function] : Scope.Functions)
+        if (Identity != Self)
+          Places.text(Visible.at(Identity).Places);
+      return llvm::toHex(
+          llvm::SHA256::hash(llvm::arrayRefFromStringRef(Places.Out)),
+          /*LowerCase=*/true);
+    };
+    auto writePlace = [&](RecordWriter &W, SourceLocation Loc) {
+      const auto Place = placeOf(Loc);
+      W.number(Loc.isValid());
+      if (Loc.isInvalid())
+        return true;
+      if (!Place)
+        return false;
+      W.text(Place->first);
+      W.number(Place->second);
+      return true;
+    };
+    auto readPlace = [&](RecordReader &R) {
+      if (!R.flag())
+        return SourceLocation();
+      const std::string Name = R.text();
+      const uint64_t Offset = R.number();
+      std::lock_guard<std::recursive_mutex> Guard(SourceLock);
+      SourceManager &SM = Ctx.getSourceManager();
+      const auto Entry = SM.getFileManager().getOptionalFileRef(Name);
+      const FileID File = Entry ? SM.translateFile(*Entry) : FileID();
+      if (File.isInvalid() || Offset > SM.getFileIDSize(File)) {
+        R.Ok = false;
+        return SourceLocation();
+      }
+      return SM.getLocForStartOfFile(File).getLocWithOffset(Offset);
+    };
+    // A limit of 0 is none. A verdict a limit of time caused answers a run
+    // whose limits are no larger than those it was reached under.
+    auto within = [](uint64_t Asked, uint64_t Recorded) {
+      return Recorded == 0 || (Asked != 0 && Asked <= Recorded);
+    };
     // A record holds only what a proof's diagnostics carry. Anything else
     // in a run (a failure, a warning, a place in the source, a confirmation
     // still to make) leaves the run unrecorded, and the function verified
-    // again next time.
-    auto recordOf = [](const FunctionRun &Run) -> std::optional<std::string> {
+    // again next time. The one verdict recorded that is not a proof is
+    // Unresolved for want of time: it costs every run that time, and holds
+    // under any limit no larger than the ones it was reached under.
+    auto recordOf = [&](const FunctionRun &Run,
+                        size_t Index) -> std::optional<std::string> {
       const auto &[Diags, AllOk, AnyFailed, FailedCallers, UndefinedSpecs,
                    CallDependencies, UnframedSpecs, UnprovenPosts,
                    ProofDependencies, InductiveLines, Confirmations,
                    Refutations, Contract, ContractCheck, Dump, Archive,
-                   Interrupted, Times, Task, Notes, Confirmed, Reused] = Run;
-      if (!AllOk || AnyFailed || !Confirmations.empty() ||
-          !Refutations.empty() || Contract || !Dump.empty() ||
-          !Archive.empty() || Interrupted || Reused)
+                   Interrupted, Times, Task, Notes, Confirmed, Reused,
+                   TheoremUnread] = Run;
+      if (!Confirmations.empty() || !Refutations.empty() || !Dump.empty() ||
+          !Archive.empty() || Interrupted || Reused || TheoremUnread)
         return std::nullopt;
+      bool Limited = false;
       RecordWriter W;
+      // The theorem of a proof function is made again by the few runs that
+      // use one: those with a counterexample to confirm by proof.
+      W.number(Contract != nullptr);
       W.number(Diags.size());
       for (const VerifyDiagnostic &D : Diags) {
         const auto &[K, Message, Loc, FunctionName, Result, LeanAutomatic,
@@ -4019,8 +4104,12 @@ public:
                      VacuousAtEntry, Partial, Trusts, ConfirmedWith,
                      UnverifiedCallers, Quiet, Hidden, Span, FunctionLoc,
                      Axiom, DiagNotes, Related, Additional, UnlessDefined] = D;
-        if (!(D.isProof() || K == VerifyDiagnostic::Trusted) ||
-            Loc.isValid() || Span.isValid() || FunctionLoc.isValid() ||
+        const bool TimedOut = K == VerifyDiagnostic::Unresolved && Result &&
+                              Result->Reason == VerifyReason::SolverTimeout;
+        Limited |= TimedOut;
+        if (!(D.isProof() || K == VerifyDiagnostic::Trusted || TimedOut) ||
+            (!TimedOut && Loc.isValid()) || Span.isValid() ||
+            FunctionLoc.isValid() ||
             LeanAutomatic || LeanRefuted || FindingOf || FoundAtEntry ||
             !ConfirmedWith.empty() || !UnverifiedCallers.empty() ||
             !Related.empty() || Additional || !UnlessDefined.empty())
@@ -4040,6 +4129,8 @@ public:
         W.number(K);
         W.text(Recorded);
         W.text(FunctionName);
+        if (!writePlace(W, Loc))
+          return std::nullopt;
         W.number(Vacuous);
         W.number(VacuousAtEntry);
         W.number(Partial);
@@ -4060,11 +4151,14 @@ public:
                      QuantifierProfile, InductionTried, InductionUsed,
                      Unchecked, UncheckedApplication, UncheckedReason,
                      ConfirmedWithContracts] = *Result;
+        if (!TimedOut &&
+            (!ObligationId.empty() || ObligationType || Location.isValid() ||
+             BeginLocation.isValid() || EndLocation.isValid() ||
+             Source.isValid() || UnprovedObligations))
+          return std::nullopt;
         if (!Model.empty() || !Trace.empty() || !MoreFailures.empty() ||
-            !ObligationId.empty() || ObligationType || Assignment ||
-            Location.isValid() || BeginLocation.isValid() ||
-            EndLocation.isValid() || Source.isValid() || CacheErrors ||
-            !CacheError.empty() || UnprovedObligations || !LeanGoals.empty() ||
+            Assignment || CacheErrors || !CacheError.empty() ||
+            !LeanGoals.empty() ||
             !QuantifierProfile.empty() || !Unchecked.empty() ||
             !UncheckedApplication.empty() || !UncheckedReason.empty() ||
             !ConfirmedWithContracts.empty())
@@ -4094,6 +4188,21 @@ public:
         W.number(InductionOnly);
         W.texts(InductionTried);
         W.text(InductionUsed);
+        W.text(ObligationId);
+        W.number(ObligationType.has_value());
+        W.number(ObligationType ? static_cast<uint64_t>(*ObligationType) : 0);
+        if (!writePlace(W, Location) || !writePlace(W, BeginLocation) ||
+            !writePlace(W, EndLocation))
+          return std::nullopt;
+        const auto &[File, Line, Column, EndLine, EndColumn, BeginLine,
+                     BeginColumn] = Source;
+        W.text(File);
+        for (unsigned Part :
+             {Line, Column, EndLine, EndColumn, BeginLine, BeginColumn})
+          W.number(Part);
+        W.number(UnprovedObligations.has_value());
+        if (UnprovedObligations)
+          W.texts(*UnprovedObligations);
       }
       W.texts(FailedCallers);
       W.texts(UndefinedSpecs);
@@ -4128,13 +4237,42 @@ public:
       }
       W.number(ContractCheck.has_value());
       W.number(ContractCheck.value_or(0));
-      return std::move(W.Out);
+      if (!Limited && (!AllOk || AnyFailed))
+        return std::nullopt;
+      RecordWriter Head;
+      Head.number(Limited);
+      if (Limited) {
+        Head.text(placesOf(Index));
+        Head.number(Opts.SolverTimeoutMs);
+        Head.number(Opts.CollectionTimeoutMs);
+        Head.number(Opts.FunctionTimeoutMs);
+      }
+      Head.number(AllOk);
+      Head.number(AnyFailed);
+      return Head.Out + W.Out;
     };
-    auto runOf = [](llvm::StringRef Record) -> std::optional<FunctionRun> {
+    auto runOf = [&](llvm::StringRef Record,
+                     size_t Index) -> std::optional<FunctionRun> {
       RecordReader R{Record};
       FunctionRun Run;
+      const bool Limited = R.flag();
+      uint64_t TimeLimit = 0;
+      if (Limited) {
+        if (R.text() != placesOf(Index))
+          return std::nullopt;
+        TimeLimit = R.number();
+        const uint64_t CollectionLimit = R.number();
+        const uint64_t FunctionLimit = R.number();
+        if (!R.Ok || !within(Opts.SolverTimeoutMs, TimeLimit) ||
+            !within(Opts.CollectionTimeoutMs, CollectionLimit) ||
+            !within(Opts.FunctionTimeoutMs, FunctionLimit))
+          return std::nullopt;
+      }
+      Run.AllOk = R.flag();
+      Run.AnyFailed = R.flag();
       Run.Reused = true;
       Run.Times = std::make_shared<BackendTimes>();
+      Run.TheoremUnread = R.flag();
       for (size_t I = 0, E = R.count(); I != E && R.Ok; ++I) {
         VerifyDiagnostic D;
         const uint64_t K = R.number();
@@ -4143,6 +4281,7 @@ public:
         D.K = static_cast<VerifyDiagnostic::Kind>(K);
         D.Message = R.text();
         D.FunctionName = R.text();
+        D.Loc = readPlace(R);
         D.Vacuous = R.flag();
         D.VacuousAtEntry = R.flag();
         D.Partial = R.flag();
@@ -4156,9 +4295,11 @@ public:
           const uint64_t Status = R.number();
           const uint64_t Reason = R.number();
           if (Status > static_cast<uint64_t>(VerifyStatus::MixedProof) ||
-              Reason != static_cast<uint64_t>(VerifyReason::None))
+              (Reason != static_cast<uint64_t>(VerifyReason::None) &&
+               Reason != static_cast<uint64_t>(VerifyReason::SolverTimeout)))
             return std::nullopt;
           Result.Status = static_cast<VerifyStatus>(Status);
+          Result.Reason = static_cast<VerifyReason>(Reason);
           Result.CacheHits = R.number();
           Result.BackendName = R.text();
           const bool Bounded = R.flag();
@@ -4182,10 +4323,38 @@ public:
           Result.InductionOnly = R.flag();
           Result.InductionTried = R.list();
           Result.InductionUsed = R.text();
+          Result.ObligationId = R.text();
+          const bool Typed = R.flag();
+          const uint64_t Type = R.number();
+          if (Typed)
+            Result.ObligationType = static_cast<ObligationKind>(Type);
+          Result.Location = readPlace(R);
+          Result.BeginLocation = readPlace(R);
+          Result.EndLocation = readPlace(R);
+          Result.Source.File = R.text();
+          for (unsigned *Part :
+               {&Result.Source.Line, &Result.Source.Column,
+                &Result.Source.EndLine, &Result.Source.EndColumn,
+                &Result.Source.BeginLine, &Result.Source.BeginColumn})
+            *Part = R.number();
+          if (R.flag())
+            Result.UnprovedObligations = R.list();
           D.Result = std::move(Result);
         }
-        if (!(D.isProof() || D.K == VerifyDiagnostic::Trusted))
+        const bool TimedOut =
+            Limited && D.K == VerifyDiagnostic::Unresolved && D.Result &&
+            D.Result->Reason == VerifyReason::SolverTimeout;
+        if (!(TimedOut || ((D.isProof() || D.K == VerifyDiagnostic::Trusted) &&
+                           (!D.Result ||
+                            D.Result->Reason == VerifyReason::None))))
           return std::nullopt;
+        if (TimedOut)
+          D.Notes.push_back(
+              "this verdict is the proof cache's record of a run with "
+              "--timeout=" +
+              std::to_string(TimeLimit) +
+              "; a larger limit, or a change to the function, verifies it "
+              "again");
         Run.Diags.push_back(std::move(D));
       }
       Run.FailedCallers = R.set();
@@ -5906,7 +6075,7 @@ public:
         Key = resultKey(I);
         ProofCacheRecord Record = Results->lookupRecord(Key);
         if (Record.Kind == ProofCacheLookupKind::Hit)
-          if (std::optional<FunctionRun> Run = runOf(Record.Payload)) {
+          if (std::optional<FunctionRun> Run = runOf(Record.Payload, I)) {
             Recorded = std::move(Record.Payload);
             if (!Opts.ProofCacheCheck)
               Runs[I] = std::move(*Run);
@@ -5915,8 +6084,11 @@ public:
       if (!Runs[I].Reused) {
         verifyFunction(I);
         const std::optional<std::string> Record =
-            Results ? recordOf(Runs[I]) : std::nullopt;
-        if (Recorded && Record != Recorded) {
+            Results ? recordOf(Runs[I], I) : std::nullopt;
+        // A verdict for want of time may differ from run to run: only
+        // records of proofs are compared.
+        const bool Proved = Recorded && RecordReader{*Recorded}.number() == 0;
+        if (Proved && Record != Recorded) {
           // --proof-cache-check: the record is not what the function's
           // verification establishes, so the key misses something the
           // verification read, or the verification is not deterministic.
@@ -5926,7 +6098,7 @@ public:
                "the proof cache's record of " + Functions[I]->Name +
                    " differs from its verification",
                Functions[I]->DeclLoc, Functions[I]->Name});
-        } else if (Record && !Recorded) {
+        } else if (Record && (!Recorded || !Proved)) {
           // A record that cannot be written costs only the next run's time.
           llvm::consumeError(Results->storeRecord(Key, *Record));
         }
@@ -5971,6 +6143,21 @@ public:
     }
     if (ShowProgress && Done != 0)
       llvm::errs() << "\r\x1b[K";
+    // A confirmation by proof uses the theorems of proof functions, which
+    // records do not hold: a run with one to make verifies the recorded
+    // proof functions after all, for their theorems alone.
+    if (llvm::any_of(Runs, [](const FunctionRun &Run) {
+          return !Run.Confirmations.empty();
+        }))
+      for (size_t I = 0; I != Runs.size(); ++I)
+        if (Runs[I].TheoremUnread) {
+          FunctionRun Recorded = std::move(Runs[I]);
+          Runs[I] = FunctionRun();
+          verifyFunction(I);
+          Recorded.Contract = std::move(Runs[I].Contract);
+          Recorded.TheoremUnread = false;
+          Runs[I] = std::move(Recorded);
+        }
     Verified = std::chrono::steady_clock::now();
     if (Opts.Summary)
       for (const FunctionRun &Run : Runs)
@@ -7747,6 +7934,7 @@ llvm::json::Object verify::summaryRecord(const VerifySummary &Summary) {
   Record["lowered"] = Summary.Lowered;
   Record["exported"] = Summary.Exported;
   Record["interrupted"] = Summary.Interrupted;
+  Record["reused"] = Summary.Reused;
   return Record;
 }
 

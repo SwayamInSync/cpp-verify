@@ -1,0 +1,68 @@
+# A verdict left Unresolved for want of time is recorded in the proof cache
+# with the limits it was reached under and with where the function is. A run
+# whose limits are no larger reads it; a larger limit, or the function
+# anywhere else, verifies again.
+
+# RUN: rm -rf %t && split-file %s %t
+
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=COLD
+# COLD: base.cpp:8:3: Unresolved: matching_loop [backend=z3] {{.*}}[reason=solver.timeout]
+# COLD-NOT: this verdict is the proof cache's record
+# COLD: Summary: 2 verified, 1 unresolved (solver.timeout 1) in
+
+# The same limit, and a smaller one, read the record: the verdict, its
+# place, and a note that says where it comes from.
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=WARM
+# RUN: not %cpp-verify --jobs=1 --timeout=700 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=WARM
+# WARM: base.cpp:8:3: Unresolved: matching_loop [backend=z3] {{.*}}[reason=solver.timeout] (proof obligation {{.*}}::assertion@8:3: timeout)
+# WARM-NEXT: note: this verdict is the proof cache's record of a run with --timeout=1500; a larger limit, or a change to the function, verifies it again
+# WARM: Summary: 2 verified, 1 unresolved (solver.timeout 1), 2 reused from the proof cache in
+
+# JSON carries the same record.
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --diagnostics-format=json --proof-cache=%t/json %t/base.cpp -- > %t/json.cold 2>/dev/null
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --diagnostics-format=json --proof-cache=%t/json %t/base.cpp -- > %t/json.warm 2>/dev/null
+# RUN: FileCheck %s --check-prefix=JSON < %t/json.warm
+# JSON: "function":"matching_loop"{{.*}}"reason":"solver.timeout"{{.*}}"source":{"column":3,{{.*}}"line":8}{{.*}}"status":"unresolved"
+# JSON: "reused":2,"schema":"cppverify.summary/1"
+
+# A larger limit verifies again, and its verdict replaces the record.
+# RUN: not %cpp-verify --jobs=1 --timeout=2500 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=LARGER
+# LARGER-NOT: this verdict is the proof cache's record
+# LARGER: Summary: 2 verified, 1 unresolved (solver.timeout 1), 1 reused from the proof cache in
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=REPLACED
+# REPLACED: note: this verdict is the proof cache's record of a run with --timeout=2500;
+
+# No limit at all is larger than any.
+# RUN: not %cpp-verify --jobs=1 --timeout=2500 --function-timeout=0 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=LARGER
+
+# The function a line further down is verified again; the proof beside it
+# is read.
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/cache %t/moved.cpp -- 2>&1 | FileCheck %s --check-prefix=MOVED
+# MOVED: moved.cpp:9:3: Unresolved: matching_loop
+# MOVED-NOT: this verdict is the proof cache's record
+# MOVED: Summary: 2 verified, 1 unresolved (solver.timeout 1), 1 reused from the proof cache in
+
+#--- base.cpp
+#include <cppverify.h>
+namespace cv = cppverify;
+cv::spec int g(int n) cv::decreases(n) { return n <= 0 ? 0 : g(n - 1) + 1; }
+void matching_loop(int a)
+  cv::pre(cv::forall(k, cv::trigger(g(k)) == g(k + 1) + 1))
+{
+  cv::ghost { cv::hide(g); }
+  cv::check(g(a) > 100);
+}
+int fine(int x) cv::pre(x < 10) cv::post(cv::result == x + 1) { return x + 1; }
+
+#--- moved.cpp
+#include <cppverify.h>
+namespace cv = cppverify;
+cv::spec int g(int n) cv::decreases(n) { return n <= 0 ? 0 : g(n - 1) + 1; }
+// A line more.
+void matching_loop(int a)
+  cv::pre(cv::forall(k, cv::trigger(g(k)) == g(k + 1) + 1))
+{
+  cv::ghost { cv::hide(g); }
+  cv::check(g(a) > 100);
+}
+int fine(int x) cv::pre(x < 10) cv::post(cv::result == x + 1) { return x + 1; }
