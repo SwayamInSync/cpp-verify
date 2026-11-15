@@ -1,3 +1,5 @@
+// A test cannot send Ctrl-C to one process of its own console on Windows.
+// UNSUPPORTED: system-windows
 // RUN: %python %S/Inputs/interrupt_after.py 15 30 %cpp-verify --jobs=1 --timeout=600000 %s -- | FileCheck %s
 // RUN: %python %S/Inputs/interrupt_after.py 5 30 %cpp-verify --jobs=1 --timeout=600000 --diagnostics-format=json %s -- | FileCheck %s --check-prefix=JSON
 // RUN: %python %S/Inputs/interrupt_after.py 15 30 %cpp-verify --jobs=4 --timeout=600000 %s -- | FileCheck %s
