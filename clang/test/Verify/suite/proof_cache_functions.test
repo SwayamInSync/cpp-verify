@@ -20,8 +20,9 @@
 # WARM-DAG: {{ first \(proof cache\)$}}
 # WARM-DAG: {{ clamp \(proof cache\)$}}
 # WARM-DAG: {{ user \(proof cache\)$}}
+# WARM-DAG: {{ lemma_twice \(proof cache\)$}}
 # WARM-DAG: {{ wrong$}}
-# WARM: Summary: 4 verified, 1 failed, 3 reused from the proof cache in
+# WARM: Summary: 4 verified, 1 failed, 4 reused from the proof cache in
 
 # The verdicts are those of a run without a cache.
 # RUN: not %cpp-verify --jobs=1 %t/base.cpp -- > %t/none.txt 2>&1
@@ -99,7 +100,7 @@
 
 # That run wrote the records again.
 # RUN: not %cpp-verify --jobs=1 --proof-cache=%t/one %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=REPAIRED
-# REPAIRED: Summary: 4 verified, 1 failed, 3 reused from the proof cache in
+# REPAIRED: Summary: 4 verified, 1 failed, 4 reused from the proof cache in
 
 #--- base.cpp
 #include <cppverify.h>
