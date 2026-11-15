@@ -1,7 +1,7 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -emit-obj -o %t.o %s
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-obj -o %t2.o %s
 // RUN: %clang -std=c++17 -fverify-contracts -c -o %t3.o %s
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++17 -fverify-contracts -emit-llvm -o - %s | FileCheck %s
 
 // The ordinary compilation path verifies promoted local objects during
 // CodeGen and still emits plain machine code for them: contracts, reference

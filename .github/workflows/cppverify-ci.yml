@@ -5,8 +5,8 @@ name: CppVerify CI
 # the release supports; the Clang build also checks the verifier with
 # clang-tidy.
 # macOS and Windows build a fresh clone the way setup.sh and setup.ps1 do for
-# a user, then verify a program with the result; macOS then runs the Verify
-# tests, with the newest cvc5 and the pinned Lean.
+# a user, then verify a program with the result and run the Verify tests:
+# macOS with the newest cvc5 and the pinned Lean, Windows with Z3 alone.
 
 on:
   # The book, the language reference, the website scripts, and DESIGN.md are
@@ -227,3 +227,11 @@ jobs:
       - name: Verify a program
         shell: bash
         run: ./.github/workflows/cppverify-smoke.sh build/bin
+
+      # lit takes grep, sed, and the other tools its RUN lines use from Git
+      # for Windows.
+      - name: Test the verifier
+        shell: pwsh
+        run: |
+          ninja -C build FileCheck not count split-file llvm-config
+          python build\bin\llvm-lit.py -sv --no-progress-bar clang\test\Verify

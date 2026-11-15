@@ -1,19 +1,19 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- > %t.first 2>&1
-// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- > %t.second 2>&1
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- %linux_target > %t.first 2>&1
+// RUN: %cpp-verify --lower-only --dump-ir=3 %s -- %linux_target > %t.second 2>&1
 // RUN: sed 's/ in [0-9.]* s$//' %t.first > %t.first.untimed
 // RUN: sed 's/ in [0-9.]* s$//' %t.second > %t.second.untimed
 // RUN: diff %t.first.untimed %t.second.untimed
 // RUN: FileCheck %s --check-prefix=OBLIGATION < %t.first
-// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=3,4 %s -- 2>&1 | FileCheck %s --check-prefix=LAYERS
-// RUN: %cpp-verify %s -- 2>&1 | FileCheck %s --check-prefix=Z3
-// RUN: %cpp-verify --backend=bmc --unroll=1 %s -- 2>&1 | FileCheck %s --check-prefix=BMC
+// RUN: %cpp-verify --int-encoding=bitvector --lower-only --dump-ir=3,4 %s -- %linux_target 2>&1 | FileCheck %s --check-prefix=LAYERS
+// RUN: %cpp-verify %s -- %linux_target 2>&1 | FileCheck %s --check-prefix=Z3
+// RUN: %cpp-verify --backend=bmc --unroll=1 %s -- %linux_target 2>&1 | FileCheck %s --check-prefix=BMC
 // RUN: rm -f %t.first.obligations %t.second.obligations
-// RUN: %cpp-verify --lower-only --obligation-out=%t.first.obligations %s --
-// RUN: %cpp-verify --lower-only --obligation-out=%t.second.obligations %s --
+// RUN: %cpp-verify --lower-only --obligation-out=%t.first.obligations %s -- %linux_target
+// RUN: %cpp-verify --lower-only --obligation-out=%t.second.obligations %s -- %linux_target
 // RUN: cmp %t.first.obligations %t.second.obligations
 // RUN: cp %s %t.relocated.cpp
-// RUN: %cpp-verify --lower-only --dump-ir=3 %t.relocated.cpp -- 2>&1 | grep 'semantic-hash' > %t.relocated.hashes
+// RUN: %cpp-verify --lower-only --dump-ir=3 %t.relocated.cpp -- %linux_target 2>&1 | grep 'semantic-hash' > %t.relocated.hashes
 // RUN: grep 'semantic-hash' %t.first > %t.original.hashes
 // RUN: diff %t.original.hashes %t.relocated.hashes
 

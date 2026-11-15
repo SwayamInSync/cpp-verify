@@ -3,7 +3,7 @@
 # RUN: %cpp-verify --obligation-in=%t.one --lower-only --dump-ir=3,4 | FileCheck %s --check-prefix=LOWER
 # RUN: %cpp-verify --obligation-in=%t.one --backend=lean --lean-out=%t.lean | FileCheck %s --check-prefix=LEAN
 # RUN: FileCheck %s --input-file=%t.lean --check-prefix=LEAN-FILE
-# RUN: /bin/cat %t.one %t.one > %t.multi
+# RUN: cat %t.one %t.one > %t.multi
 # RUN: %cpp-verify --obligation-in=%t.multi --backend=z3 | FileCheck %s --check-prefix=MULTI
 # RUN: %cpp-verify --obligation-in=%t.multi --backend=lean --lean-out=%t.multi.lean
 # RUN: sed -n 's/^theorem \([^ ]*\).*/\1/p' %t.multi.lean | sort | uniq -d > %t.duplicate-theorems
@@ -81,7 +81,7 @@
 # RUN: diff %t.functions.dump %t.unreachable-function.dump
 # RUN: %python %S/Inputs/mutate_obligation_archive.py duplicate-function %t.functions %t.duplicate-function
 # RUN: not %cpp-verify --obligation-in=%t.duplicate-function 2>&1 | FileCheck %s --check-prefix=DUPLICATE-FUNCTION
-# RUN: /bin/cat %t.functions %t.functions > %t.function-records
+# RUN: cat %t.functions %t.functions > %t.function-records
 # RUN: %python %S/Inputs/mutate_obligation_archive.py different-function-definition %t.function-records %t.different-function-definition
 # RUN: %cpp-verify --obligation-in=%t.different-function-definition --lower-only
 # RUN: not %cpp-verify --obligation-in=%t.one --backend=bmc 2>&1 | FileCheck %s --check-prefix=BMC

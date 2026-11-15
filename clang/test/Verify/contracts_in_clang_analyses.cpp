@@ -1,7 +1,7 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -verify=cxx17 %s
 // RUN: %clang_cc1 -std=c++98 -fverify-contracts -fno-verify -verify=cxx98 %s
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -analyze -analyzer-checker=core -DANALYZE -verify=analyzer %s
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o /dev/null -DMANGLE -verify=mangle %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o /dev/null -DMANGLE -verify=mangle %s
 
 // Clang's own analyses meet the contract constructs by their meaning: a
 // contract expression is never evaluated, and ghost code emits no code.

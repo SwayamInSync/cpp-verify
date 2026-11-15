@@ -268,18 +268,19 @@ Width follows the target
 ------------------------
 
 Overflow is checked at the type's real bit width (from the target data model):
-``int`` at 32 bits, ``long`` / ``long long`` at 64. So a sum that overflows
-``int`` but fits ``long`` is correctly accepted at ``long``:
+``int`` at 32 bits, ``long long`` at 64, and ``long`` at 64 on Linux and macOS
+and at 32 on Windows. So a sum that overflows ``int`` but fits ``long long`` is
+correctly accepted at ``long long``:
 
 .. code-block:: cpp
 
-   long sum(long a, long b)
+   long long sum(long long a, long long b)
      cv::pre(a == 2000000000 && b == 2000000000)
      cv::post(cv::result == 4000000000)        // 4e9 > INT_MAX, fits in int64
-   { return a + b; }                   // verifies — long is modeled at 64-bit
+   { return a + b; }              // verifies: long long is modeled at 64-bit
 
-Mixed ``int``/``long`` arithmetic sign-extends the narrower operand, just like
-C++.
+Mixed ``int``/``long long`` arithmetic sign-extends the narrower operand, just
+like C++.
 
 Loops and branches
 ------------------

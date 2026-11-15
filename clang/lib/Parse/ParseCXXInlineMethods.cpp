@@ -148,7 +148,8 @@ NamedDecl *Parser::ParseCXXInlineMethodDef(
   // In delayed template parsing mode, if we are within a class template
   // or if we are about to parse function member template then consume
   // the tokens and store them for parsing at the end of the translation unit.
-  if (getLangOpts().DelayedTemplateParsing &&
+  // CppVerify: with contracts a template is parsed where it is defined.
+  if (getLangOpts().DelayedTemplateParsing && !getLangOpts().VerifyContracts &&
       D.getFunctionDefinitionKind() == FunctionDefinitionKind::Definition &&
       !D.getDeclSpec().hasConstexprSpecifier() &&
       !(FnD && FnD->getAsFunction() &&

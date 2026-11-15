@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -ast-dump %s | FileCheck %s
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -emit-llvm -o %t %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++17 -fverify-contracts -emit-llvm -o %t %s
 // RUN: FileCheck -check-prefix=LLVM %s < %t
 //
 // Exhaustive test for ghost blocks and contract_assert:

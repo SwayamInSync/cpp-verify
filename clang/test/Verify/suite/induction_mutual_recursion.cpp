@@ -1,4 +1,4 @@
-// RUN: not %cpp-verify --timeout=60000 %s -- 2>&1 | FileCheck %s
+// RUN: not %cpp-verify --timeout=60000 %s -- %linux_target 2>&1 | FileCheck %s
 //
 // An induction through another member of a recursion group: even reaches
 // even(n - 2) through odd. Its proof takes about 3 s of solving, so the

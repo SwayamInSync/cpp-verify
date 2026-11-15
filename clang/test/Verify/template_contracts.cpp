@@ -1,5 +1,5 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -verify %s
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -triple x86_64-unknown-linux-gnu -emit-llvm -o - %s | FileCheck %s
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -ast-dump -ast-dump-filter temporaries %s | FileCheck %s --check-prefix=CLEANUPS
 // expected-no-diagnostics
 //

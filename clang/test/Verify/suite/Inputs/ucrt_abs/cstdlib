@@ -1,0 +1,19 @@
+// The integer overloads of abs as the Windows C runtime declares them: of int
+// in C, and of long and long long inline in C++, with const parameters;
+// <cstdlib> brings them into std.
+#pragma GCC system_header
+
+extern "C" {
+int abs(int);
+long labs(long);
+long long llabs(long long);
+}
+
+extern "C++" {
+inline long abs(long const _X) throw() { return labs(_X); }
+inline long long abs(long long const _X) throw() { return llabs(_X); }
+}
+
+namespace std {
+using ::abs;
+}

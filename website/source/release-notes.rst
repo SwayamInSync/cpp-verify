@@ -23,6 +23,15 @@ the verifier's output.
 Wrong results fixed
 ~~~~~~~~~~~~~~~~~~~
 
+**Templates with contracts on Windows.** For Windows targets before C++20
+the compiler delays parsing the body of a template, and the parser returned
+before it attached the contract: a function template lost its clauses, so it
+was not verified and its callers inlined it or were unresolved, and a spec
+template was taken for executable code (``executable call is unsupported in
+this expression context: scaled<3>``). With contracts a template is now
+parsed where it is defined on every target. Found by the first run of the
+Verify tests on Windows.
+
 These made 0.1.1 report ``Verified`` for a claim that is false, or compile a
 program that cannot work.
 
@@ -1088,6 +1097,22 @@ macOS 26 SDK ``std::abs(a - b)`` was ``construct.unsupported`` ("call to
 function without a verification contract: abs"). It is now its definition
 wherever the library declares it within ``std``. Testing the release archive
 on macOS 26 found this.
+
+**std::abs of long on Windows.** The Windows C runtime defines ``abs`` of
+``long`` and of ``long long`` with a ``const`` parameter (``inline long
+abs(long const)``), which the verifier did not take for the library's, so
+``std::abs(a - b)`` of two ``long`` values was ``construct.unsupported``
+there, with the same message. The parameter's qualifiers no longer matter.
+Running the Verify tests on Windows found this.
+
+**The Verify tests on Windows.** Windows CI built the verifier and verified
+one program. It now runs ``clang/test/Verify`` too. The first run passed 441
+of 522 tests and found one bug: see *Templates with contracts on Windows*
+under *Wrong results fixed*. The rest were tests that took a 64-bit ``long``
+or the names of the Itanium ABI for granted, which now name their target
+(``%linux_target``), and tests that need what Windows lacks (a signal sent
+to one process, scripts run as programs), which are unsupported there.
+``suite/windows_target.cpp`` verifies for the Windows target on every host.
 
 **Sanitizers every night.** The verifier's own code is now built with
 AddressSanitizer and UndefinedBehaviorSanitizer (``-DCPPVERIFY_SANITIZER``),

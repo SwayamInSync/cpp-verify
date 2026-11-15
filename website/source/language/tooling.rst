@@ -931,6 +931,43 @@ got:
   the run (``warning: --dump-smt2: cannot create ...``); verdicts do not
   change.
 
+Targets
+-------
+
+The verifier models the target the code is compiled for: the one of the
+host, or the one named after ``--`` (``--target=...``). Widths, alignments,
+layouts, and the range of an enumeration are the target's, so a verdict for
+one target is not a verdict for another. On Windows ``long`` has 32 bits:
+
+.. The verdicts are a target's, not the host's;
+   clang/test/Verify/suite/windows_target.cpp checks this example.
+.. cppverify-example: fragment
+
+.. code-block:: cpp
+
+   long sum(int a, int b)
+     cppverify::post(cppverify::result == a + b)
+   {
+     return static_cast<long>(a) + b;
+   }
+
+.. code-block:: console
+
+   $ cpp-verify sum.cpp -- --target=x86_64-unknown-linux-gnu
+   Verified: sum [backend=z3]
+   $ cpp-verify sum.cpp -- --target=x86_64-pc-windows-msvc
+   sum.cpp:4:31: error: verification failed: sum [overflow] [backend=z3] [reason=counterexample]
+
+Verifying for a target needs its headers only if the file includes them.
+
+For Windows targets before C++20 the compiler delays parsing a template's
+body until the template is used, as older versions of MSVC did. With
+contracts (``-fverify-contracts``, and so ``cpp-verify``) a template is
+parsed where it is defined on every target, as MSVC does with
+``/permissive-`` and in C++20: its contract belongs to its definition, and
+its body is verified as the standard reads it. ``-fdelayed-template-parsing``
+has no effect there.
+
 Time limits
 -----------
 

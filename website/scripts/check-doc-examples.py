@@ -81,7 +81,7 @@ def directives_before(lines, index, pattern):
 
 
 def markdown_blocks(page):
-    lines = page.read_text().splitlines()
+    lines = page.read_text(encoding="utf-8").splitlines()
     found = []
     index = 0
     while index < len(lines):
@@ -105,7 +105,7 @@ def markdown_blocks(page):
 def blocks(page):
     if page.suffix == ".md":
         return markdown_blocks(page)
-    lines = page.read_text().splitlines()
+    lines = page.read_text(encoding="utf-8").splitlines()
     found = []
     for index, line in enumerate(lines):
         match = BLOCK.match(line)
@@ -179,7 +179,7 @@ def processors():
 def run(cpp_verify, source, arguments, timeout):
     with tempfile.TemporaryDirectory() as directory:
         path = pathlib.Path(directory) / "example.cpp"
-        path.write_text(source)
+        path.write_text(source, encoding="utf-8")
         arguments = [a.replace("{dir}", directory) for a in arguments]
         try:
             done = subprocess.run([cpp_verify, *arguments, str(path), "--"],

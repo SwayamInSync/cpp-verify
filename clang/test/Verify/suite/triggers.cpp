@@ -1,5 +1,5 @@
-// RUN: not %cpp-verify --timeout=3000 --profile-quantifiers %s -- 2>&1 | FileCheck %s
-// RUN: not %cpp-verify --timeout=3000 --profile-quantifiers --diagnostics-format=json %s -- 2>/dev/null | FileCheck %s --check-prefix=JSON
+// RUN: not %cpp-verify --timeout=3000 --profile-quantifiers %s -- 2>&1 | FileCheck %s --check-prefixes=CHECK%if !system-windows %{,PROFILE%}
+// RUN: %if !system-windows %{ not %cpp-verify --timeout=3000 --profile-quantifiers --diagnostics-format=json %s -- 2>/dev/null | FileCheck %s --check-prefix=JSON %}
 // RUN: %cpp-verify --lower-only --dump-ir=3 %s -- 2>&1 | FileCheck %s --check-prefix=VC
 //
 // trigger(term) in a quantifier body makes term the pattern that
@@ -48,7 +48,7 @@ void matching_loop(int a)
   cppverify::check(g(a) > 100);
 }
 // CHECK-DAG: Unresolved: matching_loop
-// CHECK-DAG: note: the quantifier at [[@LINE-6]]:18 was instantiated {{[0-9]+}} times, up to generation {{[0-9]+}}
+// PROFILE-DAG: note: the quantifier at [[@LINE-6]]:18 was instantiated {{[0-9]+}} times, up to generation {{[0-9]+}}
 // JSON-DAG: "function":"matching_loop"{{.*}}"quantifier_profile":[{"column":18,"instances":{{[0-9]+}},"line":[[@LINE-7]],
 
 // A collection read can trigger; another collection operation cannot.

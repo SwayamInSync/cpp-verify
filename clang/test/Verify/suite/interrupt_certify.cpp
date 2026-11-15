@@ -1,3 +1,5 @@
+// A test cannot send Ctrl-C to one process of its own console on Windows.
+// UNSUPPORTED: system-windows
 // RUN: %python %S/Inputs/interrupt_after.py 1 4 %cpp-verify --jobs=1 --timeout=600000 %s -- | FileCheck %s
 
 // Ctrl-C also stops the evaluation of a definition. Before it solves, the

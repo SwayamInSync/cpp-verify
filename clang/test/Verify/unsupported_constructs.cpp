@@ -99,7 +99,8 @@ int name(int x)
   const char *s = __func__;
   return x;
 }
-// CHECK: unsupported_constructs.cpp:[[@LINE-3]]:19: error: name: __func__ as a pointer is unsupported
+// For the Microsoft ABI __func__ is a string literal.
+// CHECK: unsupported_constructs.cpp:[[@LINE-4]]:19: error: name: {{__func__ as a pointer is unsupported|a pointer into a string literal is unsupported; read its characters by index}}
 
 int helper(int x);
 

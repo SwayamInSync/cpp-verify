@@ -1,7 +1,7 @@
 // RUN: not %cpp-verify --jobs=1 %s -- -I %S/Inputs 2>&1 | FileCheck %s --implicit-check-not=error:
 // RUN: %clang_cc1 -std=c++11 -fsyntax-only -Wall -Wextra -pedantic -verify -I %S/Inputs %s
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fsyntax-only -verify -I %S/Inputs %s
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o - -I %S/Inputs %s | FileCheck %s --check-prefix=IR
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++17 -fverify-contracts -fno-verify -emit-llvm -o - -I %S/Inputs %s | FileCheck %s --check-prefix=IR
 // RUN: not %cpp-verify --jobs=1 --diagnostics-format=json %s -- -I %S/Inputs | FileCheck %s --check-prefix=JSON
 //
 // A header shared with compilers that do not know the constructs guards them
