@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++17 -fverify-contracts -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu -std=c++17 -fverify-contracts -emit-llvm -o - %s | FileCheck %s
 //
 // Test that ghost code, spec functions, proof functions, and contract_assert
 // produce zero LLVM IR. Only regular functions should appear in the output.
