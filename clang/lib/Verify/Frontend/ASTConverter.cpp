@@ -4772,7 +4772,8 @@ ASTConverter::convertAbs(const CallExpr *CE) {
     // (libstdc++), in a namespace of its own within std that std uses
     // (libc++'s std::__math), or, for long and long long, in the global
     // namespace of its <stdlib.h>, which <cstdlib> brings into std (older
-    // libc++). A global abs of the user's own is a function like any other.
+    // libc++, and the Windows C runtime, whose parameters are const). A
+    // global abs of the user's own is a function like any other.
     const FunctionDecl *Callee = CE->getDirectCallee();
     const auto IsWithinStd = [](const DeclContext *DC) {
       for (; DC; DC = DC->getParent())
@@ -4787,8 +4788,8 @@ ASTConverter::convertAbs(const CallExpr *CE) {
         !Callee->getIdentifier() ||
         Callee->getName() != "abs" || Callee->getNumParams() != 1 ||
         !Callee->getParamDecl(0)->getType()->isIntegerType() ||
-        !Ctx.hasSameType(Callee->getParamDecl(0)->getType(),
-                         Callee->getReturnType()))
+        !Ctx.hasSameUnqualifiedType(Callee->getParamDecl(0)->getType(),
+                                    Callee->getReturnType()))
       return std::nullopt;
   }
   }
