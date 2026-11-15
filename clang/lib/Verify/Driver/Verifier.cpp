@@ -4534,15 +4534,15 @@ public:
         if (Opts.CheckUB && !F.TotalExpressions && instrumentUBChecks(Bounded))
           return Notes;
         SpecInliner(FnMap, Bounded.SpecFuel).prepareFunction(Bounded);
-        // The search after a failure takes at most one query's time.
+        // The search explains a failure already found, so it takes one
+        // attempt's time, not a query's.
         Z3VerifyBackend Unroller(Execution, "bmc");
         std::optional<std::chrono::steady_clock::time_point> Until = Deadline;
-        if (Opts.SolverTimeoutMs != 0) {
-          const auto Slice = std::chrono::steady_clock::now() +
-                             std::chrono::milliseconds(Opts.SolverTimeoutMs);
-          if (!Until || Slice < *Until)
-            Until = Slice;
-        }
+        const auto Slice =
+            std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(attemptBudgetMs(Opts.SolverTimeoutMs));
+        if (!Until || Slice < *Until)
+          Until = Slice;
         Unroller.setDeadline(Until);
         auto iterations = [](unsigned Bound) {
           return std::to_string(Bound) +
@@ -4559,7 +4559,16 @@ public:
         };
         bool Unrolled = false;
         std::string Earlier;
+        auto noFailureWithin = [&](unsigned Bound) {
+          return "no execution fails this check within " + iterations(Bound) +
+                 " of each loop" +
+                 (Earlier.empty()
+                      ? std::string()
+                      : " without failing an earlier one first" + Earlier);
+        };
         for (unsigned Bound = 0; Bound <= Opts.ConfirmBound; ++Bound) {
+          const std::string Settled = Bound != 0 ? noFailureWithin(Bound - 1)
+                                                 : std::string();
           VFunction Copy = LoopUnroller::unroll(Bounded, Bound);
           Passivizer Unrolling;
           Unrolling.setFunctionMap(InterfaceMap);
@@ -4578,6 +4587,7 @@ public:
           annotateObligationSources(Module);
           bool Copies = false;
           bool CopiesHold = true;
+          bool OutOfTime = false;
           bool Unwound = true;
           // Every failure is reported, so a copy, or a loop's unwinding, is
           // solved in the executions that pass the failing checks before it:
@@ -4623,6 +4633,7 @@ public:
               return Notes;
             }
             CopiesHold &= Result.Status == VerifyStatus::Verified;
+            OutOfTime |= Result.Reason == VerifyReason::SolverTimeout;
           }
           Unrolled |= Copies;
           // Unrolled once, every loop body holds a copy of each of its
@@ -4631,8 +4642,12 @@ public:
           // measure, which unrolling drops at every bound.
           if (Bound >= 1 && !Unrolled)
             return Notes;
-          if (!CopiesHold)
+          if (!CopiesHold) {
+            // What the bounds before this one settled still stands.
+            if (OutOfTime && Bound >= 2 && Unrolled)
+              Notes.push_back(Settled + "; the search ran out of time there");
             return Notes;
+          }
           if (Copies && Unwound) {
             Notes.push_back(
                 Earlier.empty()
@@ -4650,12 +4665,7 @@ public:
           }
         }
         if (Unrolled)
-          Notes.push_back("no execution fails this check within " +
-                          iterations(Opts.ConfirmBound) + " of each loop" +
-                          (Earlier.empty()
-                               ? std::string()
-                               : " without failing an earlier one first" +
-                                     Earlier));
+          Notes.push_back(noFailureWithin(Opts.ConfirmBound));
         return Notes;
       };
       Passivizer P;

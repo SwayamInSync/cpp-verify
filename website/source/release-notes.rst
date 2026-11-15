@@ -746,7 +746,9 @@ execution it gives passes the failing checks before this one, and a check
 that holds in every execution that passes them is noted with an earlier
 check that fails. A failure of a function whose loop has no
 ``cppverify::decreases`` names that loop too
-(:doc:`language/functions-loops`).
+(:doc:`language/functions-loops`). The search takes at most a sixth of the
+query timeout (5 s by default), and when its time ends before the bound the
+note says how many iterations it settled (:doc:`language/tooling`).
 
 **Contracts across files.** A contract declared in a header and defined in
 another file left every caller ``Unresolved [callee.contract]``, even when
