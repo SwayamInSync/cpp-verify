@@ -514,6 +514,11 @@ class Evaluator {
   };
   std::vector<Fixpoint *> Fixpoints;
   static constexpr size_t MaxFixpointArguments = 1024;
+  /// Steps the search of derivation heights may take once the fixpoint's
+  /// exploration was cut: it repeats that exploration height by height, so
+  /// it rarely finds more, and its end must not depend on what the check
+  /// evaluated before it.
+  static constexpr uint64_t HeightSearchSteps = FirstSlice;
   /// Terms a quantifier body may grow to by unfolding definitions.
   static constexpr uint64_t MaxUnfoldedTerms = 20000;
 
@@ -2729,9 +2734,19 @@ class Evaluator {
       for (unsigned I = 0; I != Args.size(); ++I)
         Scope.emplace_back(Function.Parameters[I].Name, Args[I]);
       Active.push_back(&Function);
+      const uint64_t OuterEnd = SliceEnd;
+      if (Function.Unfolding)
+        SliceEnd = std::min(OuterEnd, Steps + HeightSearchSteps);
       Value = coerce(eval(Function.StepDefinition.get()),
                      Function.StepDefinition->Sort, Function.ResultSort,
                      isSigned(Function.ResultSort));
+      SliceEnd = OuterEnd;
+      // The search's own slice ended, not one around it: the heights tried
+      // show no derivation.
+      if (!Value && SliceSpent && !Exhausted && Steps <= OuterEnd) {
+        SliceSpent = false;
+        LimitInDefinition = true;
+      }
       Active.pop_back();
       Scope.resize(SavedSize);
       ScopeBase = SavedBase;

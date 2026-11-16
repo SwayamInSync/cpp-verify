@@ -1049,6 +1049,15 @@ refuses a ``lake`` outside elan that reports another Lean
 **clang-format.** A range footprint is written ``p[lo : n]``, not ``p [lo:n]``
 (:doc:`language/tooling`).
 
+**An undecided inductive predicate costs little.** A false claim such as
+``pre(even(n)) post(n >= 0)`` about an inductive predicate took 42 s to
+report as ``spec.fuel``, in 0.1.1 too: each check of a counterexample that
+needed ``even(-1)`` searched derivation heights until the whole check ran out
+of steps, and a check that ends that way keeps nothing for the next. The
+height search now has a slice of its own, so the answer is the same for
+every counterexample and is kept: the claim reports in about a second, with
+the same message (:doc:`language/ghost-proofs`).
+
 Testing
 ~~~~~~~
 
