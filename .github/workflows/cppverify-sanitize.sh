@@ -52,6 +52,23 @@ case $MODE in
 esac
 export SKIPPED="^// UNSUPPORTED: (.*[ ,])?(true|$FEATURE)(,|\$)"
 
+# The seconds a program may take.
+export LIMIT=${CPPVERIFY_SANITIZE_LIMIT:-900}
+
+# The stack of every thread of a process, by gdb where it may attach: as
+# this user, or as root where sudo asks no password (CI runners).
+stacks() {
+  echo "cppverify-sanitize: the threads of the verifier after $LIMIT s:"
+  command -v gdb > /dev/null || { echo "(gdb is not installed)"; return; }
+  local trace
+  trace=$(gdb -p "$1" -batch -ex "thread apply all bt 40" 2>&1)
+  if echo "$trace" | grep -q "Could not attach" && sudo -n true 2> /dev/null; then
+    trace=$(sudo -n gdb -p "$1" -batch -ex "thread apply all bt 40" 2>&1)
+  fi
+  echo "$trace" | tail -n 800
+}
+export -f stacks
+
 run() {
   local file=$1 name extra=()
   name=$(echo "${file#$TESTS/}" | tr / _)
@@ -64,12 +81,25 @@ run() {
   else
     extra=(--jobs=2)
   fi
-  timeout -k 60 900 "$CPPVERIFY" --timeout=5000 "${extra[@]}" "$file" -- \
-    "-I$TESTS/suite/Inputs" > "$OUT/$name.txt" 2>&1
-  local status=$?
-  if [ $status -eq 124 ] || [ $status -eq 137 ]; then
-    echo "cppverify-sanitize: no result within 900 s (status $status)" >> "$OUT/$name.txt"
-  elif [ $status -ge 128 ] && ! grep -q '__debug crash' "$file"; then
+  "$CPPVERIFY" --timeout=5000 "${extra[@]}" "$file" -- \
+    "-I$TESTS/suite/Inputs" > "$OUT/$name.txt" 2>&1 &
+  local pid=$! watchdog status
+  # After the limit: where every thread is, before the program is stopped.
+  # A hang that happens one night in ten cannot be found any other way.
+  (
+    sleep "$LIMIT"
+    stacks $pid >> "$OUT/$name.txt" 2>&1
+    echo "cppverify-sanitize: no result within $LIMIT s" >> "$OUT/$name.txt"
+    kill -KILL $pid 2> /dev/null
+  ) &
+  watchdog=$!
+  wait $pid 2> /dev/null
+  status=$?
+  pkill -P $watchdog 2> /dev/null
+  kill $watchdog 2> /dev/null
+  wait $watchdog 2> /dev/null
+  grep -q '^cppverify-sanitize: no result' "$OUT/$name.txt" && return 0
+  if [ $status -ge 128 ] && ! grep -q '__debug crash' "$file"; then
     echo "cppverify-sanitize: the verifier died (status $status)" >> "$OUT/$name.txt"
   fi
   return 0
