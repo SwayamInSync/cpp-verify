@@ -1252,10 +1252,15 @@ Decl *Parser::ParseFunctionDefinition(ParsingDeclarator &D,
 
   // In delayed template parsing mode, for function template we consume the
   // tokens and store them for late parsing at the end of the translation unit.
-  // CppVerify: a template's contract belongs to its definition, and its body
-  // is verified as written, so with contracts a template is parsed where it
-  // is defined on every target.
-  if (getLangOpts().DelayedTemplateParsing && !getLangOpts().VerifyContracts &&
+  // CppVerify: a contract belongs to the definition it is written on, and
+  // the body of a spec or proof function is parsed as one, so a template
+  // with clauses, or a spec or proof template, is parsed where it is
+  // defined on every target. Any other template is delayed as without
+  // contracts: code that needs the delay still compiles.
+  const bool HasCppVerifyContract =
+      Contract.Present || D.getDeclSpec().isSpecFunctionSpecified() ||
+      D.getDeclSpec().isProofFunctionSpecified();
+  if (getLangOpts().DelayedTemplateParsing && !HasCppVerifyContract &&
       Tok.isNot(tok::equal) &&
       TemplateInfo.Kind == ParsedTemplateKind::Template &&
       LateParsedAttrs->empty() && Actions.canDelayFunctionBody(D)) {
