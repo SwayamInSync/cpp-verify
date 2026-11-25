@@ -7594,6 +7594,10 @@ public:
     FunctionContractInfo Info;
     bool Present = false;
   };
+  /// Whether the function body at Tok names the namespace cppverify, by
+  /// that word or by a namespace alias of it before `::`: what a construct,
+  /// a collection, or cppverify::valid is written with. Looks ahead only.
+  bool functionBodyNamesCppVerify();
   /// Whether Tok starts a function clause, after a declarator.
   bool isFunctionContractClause();
   void ParseFunctionContractClauses(ParsingDeclarator &D,
