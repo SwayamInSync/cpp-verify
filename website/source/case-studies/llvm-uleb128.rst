@@ -93,6 +93,26 @@ Measured evidence
 The full artifact is therefore described as **Z3-verified**, not
 portfolio-certified.
 
+Running it
+----------
+
+The decoder's proof needs more than the default time limit of 30 s for a
+query, so the case study is run with a larger one, as its test is:
+
+.. code-block:: console
+
+   $ cpp-verify --timeout=300000 llvm_uleb128.cpp
+   ...
+   Summary: 14 verified in 62.9 s
+
+On a 32-core machine the run takes about a minute, nearly all of it in one
+query of ``decode_uleb128_canonical``, the function's complete query, which
+takes 57 s. At the default limit that function is ``Unresolved`` with
+``solver.timeout`` after 34 s, and ``roundtrip_uleb128``, which calls it,
+with ``callee.contract``; ``--timeout=60000`` is enough. The time is the
+solver's search: the same query replayed alone in Z3 takes 31 s, and a
+renamed local can move it either way.
+
 Known LLVM shift defect
 -----------------------
 
