@@ -24,6 +24,7 @@
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/SaveAndRestore.h"
 
 using namespace clang;
@@ -342,6 +343,13 @@ void Parser::diagnoseMisplacedCppVerify() {
 bool Parser::functionBodyNamesCppVerify() {
   CachedTokens Toks;
   {
+    // The tokens are read again where the body is parsed or kept, which
+    // reports what is wrong with them: once.
+    DiagnosticsEngine &Diags = PP.getDiagnostics();
+    const bool WasQuiet = Diags.getSuppressAllDiagnostics();
+    Diags.setSuppressAllDiagnostics(true);
+    llvm::scope_exit Restore(
+        [&] { Diags.setSuppressAllDiagnostics(WasQuiet); });
     RevertingTentativeParsingAction Peek(*this);
     LexTemplateFunctionForLateParsing(Toks);
   }
