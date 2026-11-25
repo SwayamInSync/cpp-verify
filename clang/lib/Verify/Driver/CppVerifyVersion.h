@@ -27,7 +27,7 @@ inline constexpr llvm::StringLiteral CVC5NewestTestedVersion = "1.4.2";
 /// verification run would find on PATH.
 void printVersion(llvm::raw_ostream &OS);
 
-/// The release, as --version names it: "0.2.0-dev".
+/// The release, as --version names it: "0.3.0-dev".
 llvm::StringRef releaseVersion();
 /// What tells this build of the verifier and its Z3 from any other: the
 /// release, the revision, the Z3 it links, and for a development build the

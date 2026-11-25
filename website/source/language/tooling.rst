@@ -879,7 +879,7 @@ got:
 
 .. code-block:: text
 
-   ; cpp-verify 0.2.0-dev, z3 4.13.4
+   ; cpp-verify 0.2.0, z3 4.13.4
    ; clamp: the postcondition check at clamp.cpp:5:23 (fn_5f5a35636c616d7069::postcondition@5:23)
    ; replay: z3 clamp-14e9c9/postcondition-5-23.z3-d86b7e26.smt2
    (set-option :timeout 30000)

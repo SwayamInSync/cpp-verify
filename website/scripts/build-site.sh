@@ -83,7 +83,7 @@ release is $latest: <a href=\"$SITE_URL/\">its documentation</a>."
   echo "==> $series: $tag"
   tree="$WORK/$tag"
   mkdir -p "$tree"
-  git -C "$ROOT" archive "$tag" website docs clang/lib/Verify | tar -x -C "$tree"
+  git -C "$ROOT" archive "$tag" website docs clang/lib/Verify clang/CMakeLists.txt | tar -x -C "$tree"
   build_tree "$tree" "$OUT/$series" "CppVerify $version" "$banner"
   if [[ "$tag" == "$latest_tag" ]]; then
     cp -R "$OUT/$series/." "$OUT/"

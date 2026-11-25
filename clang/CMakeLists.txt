@@ -397,7 +397,7 @@ message(STATUS "Clang version: ${CLANG_VERSION}")
 
 # cpp-verify's release, which --version reports and the predefined macros
 # __cppverify_major__, __cppverify_minor__, and __cppverify_patchlevel__ name.
-set(CPPVERIFY_VERSION 0.2.0-dev)
+set(CPPVERIFY_VERSION 0.3.0-dev)
 if(NOT CPPVERIFY_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
   message(FATAL_ERROR "CPPVERIFY_VERSION is not major.minor.patch: ${CPPVERIFY_VERSION}")
 endif()
