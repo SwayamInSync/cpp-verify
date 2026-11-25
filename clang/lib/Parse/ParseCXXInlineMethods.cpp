@@ -88,6 +88,11 @@ NamedDecl *Parser::ParseCXXInlineMethodDef(
     }
   }
 
+  // CppVerify: whether the declarator has clauses, whose tokens the next
+  // call takes, or is a spec or proof function.
+  const bool HasCppVerifyContract =
+      MemberContractTokens || D.getDeclSpec().isSpecFunctionSpecified() ||
+      D.getDeclSpec().isProofFunctionSpecified();
   if (FnD)
     HandleMemberFunctionDeclDelays(D, FnD);
 
@@ -148,8 +153,9 @@ NamedDecl *Parser::ParseCXXInlineMethodDef(
   // In delayed template parsing mode, if we are within a class template
   // or if we are about to parse function member template then consume
   // the tokens and store them for parsing at the end of the translation unit.
-  // CppVerify: with contracts a template is parsed where it is defined.
-  if (getLangOpts().DelayedTemplateParsing && !getLangOpts().VerifyContracts &&
+  // CppVerify: a member with clauses, or a spec or proof member, is parsed
+  // where it is defined, as a function template is (ParseFunctionDefinition).
+  if (getLangOpts().DelayedTemplateParsing && !HasCppVerifyContract &&
       D.getFunctionDefinitionKind() == FunctionDefinitionKind::Definition &&
       !D.getDeclSpec().hasConstexprSpecifier() &&
       !(FnD && FnD->getAsFunction() &&
