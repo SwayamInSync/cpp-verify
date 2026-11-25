@@ -72,8 +72,8 @@ Measured evidence
      - Scope
    * - Complete deductive proof
      - Z3 verified
-     - 328 canonical obligations: 285 across encoder (186), decoder (33), and
-       round trip (66), plus 43 discharging the eleven machine-byte
+     - 395 canonical obligations: 352 across encoder (246), decoder (38), and
+       round trip (68), plus 43 discharging the eleven machine-byte
        ``cppverify::proof`` lemmas (four for each of ten, three for the last)
    * - Reduced length/bounds proof
      - Z3+cvc5 portfolio verified
@@ -92,6 +92,26 @@ Measured evidence
 
 The full artifact is therefore described as **Z3-verified**, not
 portfolio-certified.
+
+Running it
+----------
+
+The decoder's proof needs more than the default time limit of 30 s for a
+query, so the case study is run with a larger one, as its test is:
+
+.. code-block:: console
+
+   $ cpp-verify --timeout=300000 llvm_uleb128.cpp
+   ...
+   Summary: 14 verified in 62.9 s
+
+On a 32-core machine the run takes about a minute, nearly all of it in one
+query of ``decode_uleb128_canonical``, the function's complete query, which
+takes 57 s. At the default limit that function is ``Unresolved`` with
+``solver.timeout`` after 34 s, and ``roundtrip_uleb128``, which calls it,
+with ``callee.contract``; ``--timeout=60000`` is enough. The time is the
+solver's search: the same query replayed alone in Z3 takes 31 s, and
+renaming one local of the function changes its proof from 60 s to 51 s.
 
 Known LLVM shift defect
 -----------------------

@@ -193,6 +193,18 @@ bound in time, so fewer results depend on the machine's load. A result that
 was ``Unresolved`` with ``solver.timeout`` may now be decided, and the other
 way round under heavy load (:doc:`language/tooling`).
 
+**Proofs near the time limit.** A function with contracts has more checks
+than in 0.1.1 (the reads in its postconditions and loop invariants are
+checked against memory), so its queries are larger, and 0.1.1 gave a
+function's complete query a second full ``--timeout`` after its single
+checks, where 0.2, with more than one job, solves both side by side within
+one. A proof that took most of the limit in 0.1.1 can therefore end
+``solver.timeout`` at the same limit: the decoder of the ULEB128 case
+study, which 0.1.1 proved at the default 30 s in a run of 60 s (and not at
+``--timeout=20000``), needs ``--timeout=60000`` in 0.2, where the run then
+takes 63 s. Raise ``--timeout`` for such a function
+(:doc:`case-studies/llvm-uleb128`).
+
 **Lemmas that time out.** A proof function that ended ``Unresolved`` with
 ``solver.timeout`` is now tried by the automatic inductions too, which can
 prove it (``[by induction on j]``). They start once the direct attempt has
