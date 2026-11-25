@@ -567,12 +567,14 @@ Moving code, comments, and edits to other functions leave a record valid; an
 edit to a callee's body verifies the callee again and not its callers. What
 each verdict rests on is still settled in every run, so a recorded proof is
 demoted when a contract it assumes fails. A verdict unresolved for want of
-time is recorded as well, with its limits and with where the function is: a
-run with no larger limit and nothing moved reads it in place of waiting the
-limit out again, and says so in a note. Failures and other unresolved
-verdicts are verified every run. ``--proof-cache-check`` verifies all
-the same and reports a record that differs. See *Functions the proof cache
-replays* in the tooling reference.
+time is recorded as well, with its limits, its number of workers, and where
+the function is: a run with no larger limit, no more workers, and nothing
+moved reads it in place of waiting the limit out again, and says so in a
+note. Failures and other unresolved verdicts are verified every run.
+``--proof-cache-check`` verifies all the same, reports a record of a proof
+that differs, and replaces the record of a timeout with what it finds. The
+summary counts the replayed functions the run reports. See *Functions the
+proof cache replays* in the tooling reference.
 
 **Source lookups from parallel failures.** With more than one job, a failure
 whose counterexample passes through a loop gets notes from unrolling the
