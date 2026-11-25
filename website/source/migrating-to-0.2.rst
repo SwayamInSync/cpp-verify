@@ -6,7 +6,8 @@ Migrating from 0.1 to 0.2
 (23.1.6, a point release after 0.1's 23.1.3), and the same Z3 4.13.4. This
 page lists what a user of 0.1.1 has to know or change: source that is now an
 error, verdicts that change on unchanged source, command lines, output
-formats, and Lean projects. Each item says what to do; :doc:`release-notes` describes every change, with examples.
+formats, and Lean projects. Each item says what to do;
+:doc:`release-notes` describes every change, with examples.
 
 Versions
 --------
