@@ -339,6 +339,35 @@ void Parser::diagnoseMisplacedCppVerify() {
 // Function clauses
 //===----------------------------------------------------------------------===//
 
+bool Parser::functionBodyNamesCppVerify() {
+  CachedTokens Toks;
+  {
+    RevertingTentativeParsingAction Peek(*this);
+    LexTemplateFunctionForLateParsing(Toks);
+  }
+  for (size_t I = 0; I != Toks.size(); ++I) {
+    const Token &T = Toks[I];
+    // A scope already annotated is not looked into: the body is parsed here.
+    if (T.isOneOf(tok::annot_cppverify, tok::annot_cxxscope))
+      return true;
+    if (T.isNot(tok::identifier))
+      continue;
+    const IdentifierInfo *II = T.getIdentifierInfo();
+    if (II->isStr("cppverify"))
+      return true;
+    if (I + 1 == Toks.size() || Toks[I + 1].isNot(tok::coloncolon))
+      continue;
+    LookupResult Named(Actions, II, T.getLocation(),
+                       Sema::LookupNamespaceName);
+    Named.suppressDiagnostics();
+    Actions.LookupName(Named, getCurScope());
+    if (const auto *Alias = Named.getAsSingle<NamespaceAliasDecl>();
+        Alias && isCppVerifyNamespace(Alias->getNamespace()))
+      return true;
+  }
+  return false;
+}
+
 bool Parser::isFunctionContractClause() {
   // Anything written cppverify:: after a declarator is parsed as a clause;
   // a construct of another kind is diagnosed there.
