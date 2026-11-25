@@ -206,6 +206,15 @@ llvm::Error ProofCache::storeRecord(llvm::StringRef Key,
                       /*Replace=*/true);
 }
 
+llvm::Error ProofCache::removeRecord(llvm::StringRef Key) const {
+  if (!enabled() || !InitializationError.empty())
+    return llvm::Error::success();
+  if (std::error_code EC =
+          llvm::sys::fs::remove(entryPath(recordHeader(Key))))
+    return llvm::createStringError(EC, "cannot remove a proof cache entry");
+  return llvm::Error::success();
+}
+
 llvm::Error ProofCache::pruneImpl(uint64_t ReserveBytes,
                                   uint64_t ReserveEntries,
                                   bool EvictOne) const {
