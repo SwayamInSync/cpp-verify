@@ -2754,7 +2754,8 @@ CVC5VerifyBackend::verifyQuery(const ObligationModule &Module,
     return Limits;
   };
   // Applications at closed arguments are computed, not searched for.
-  Instances = closedApplicationInstances(Module, *Query, checkLimits());
+  Instances = closedApplicationInstances(
+      Module, *Query, checkLimits(), DefinitionRefinement::MaxInstances);
   // cvc5 has only instances to refine with; they get a share of the budget.
   const auto Deadline =
       Start + std::chrono::milliseconds(
