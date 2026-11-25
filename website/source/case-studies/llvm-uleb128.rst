@@ -3,7 +3,7 @@ LLVM ULEB128
 
 CppVerify's flagship case study verifies the unpadded 64-bit ULEB128 buffer
 codec derived from LLVM 22.1.3's ``llvm/Support/LEB128.h``. This release is
-based on LLVM 23.1.3, whose encoder is unchanged and whose decoder adds the
+based on LLVM 23.1.6, whose encoder is unchanged and whose decoder adds the
 guard described under "Known LLVM shift defect" below.
 
 ULEB128 stores an unsigned integer in seven-bit groups. The high bit says
@@ -57,7 +57,7 @@ The artifact is faithful but not verbatim:
        quantified form timed out.
 
 A native harness compiles the extraction with proof constructs erased and
-compares it with this tree's LLVM 23.1.3 header on lengths, bytes, sentinels,
+compares it with this tree's LLVM 23.1.6 header on lengths, bytes, sentinels,
 decoding, consumed counts, and error results.
 
 Measured evidence
@@ -119,7 +119,7 @@ Known LLVM shift defect
 LLVM 22.1.3's decoder validates pure zero extension in an overlong input but
 still evaluates ``Slice << Shift``. For ten ``0x80`` bytes followed by
 ``0x00``, the next accumulator step has ``Shift == 70``. A 64-bit shift by 70
-is undefined in C++. LLVM 23.1.3's decoder, the one in this tree, evaluates
+is undefined in C++. LLVM 23.1.6's decoder, the one in this tree, evaluates
 the step only under ``if (LLVM_LIKELY(Shift < 64))``, so that shift no longer
 occurs.
 
