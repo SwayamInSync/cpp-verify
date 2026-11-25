@@ -5,7 +5,8 @@
 // has appeared, the search for an execution that fails it stops, instead of
 // solving every check at every bound until its time runs out (5.2 s at
 // --timeout=5000 for this function, 20 s at --timeout=20000). The time report
-// shows the confirmation under a second.
+// shows the confirmation well under the timeout; a loaded Windows runner
+// took 1.2 s.
 
 namespace cv = cppverify;
 
@@ -34,4 +35,4 @@ void bounded_copy(const int *a, int *out, int n)
 // CHECK: note: the counterexample's state at the loop at {{[0-9]+}}:3 is any state its invariants allow
 // CHECK-NOT: fails this check
 // CHECK: total  lowering   solving  induction  certification  confirmation  function
-// CHECK-NEXT: {{ *[0-9.]+ +[0-9.]+ +[0-9.]+ +[0-9.]+ +[0-9.]+ +0\.[0-9]+}}  bounded_copy
+// CHECK-NEXT: {{ *[0-9.]+ +[0-9.]+ +[0-9.]+ +[0-9.]+ +[0-9.]+ +[0-2]\.[0-9]+}}  bounded_copy
