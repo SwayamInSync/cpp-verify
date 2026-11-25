@@ -24,6 +24,7 @@
 #include "clang/Sema/DeclSpec.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/SaveAndRestore.h"
 
 using namespace clang;
@@ -339,6 +340,42 @@ void Parser::diagnoseMisplacedCppVerify() {
 // Function clauses
 //===----------------------------------------------------------------------===//
 
+bool Parser::functionBodyNamesCppVerify() {
+  CachedTokens Toks;
+  {
+    // The tokens are read again where the body is parsed or kept, which
+    // reports what is wrong with them: once.
+    DiagnosticsEngine &Diags = PP.getDiagnostics();
+    const bool WasQuiet = Diags.getSuppressAllDiagnostics();
+    Diags.setSuppressAllDiagnostics(true);
+    llvm::scope_exit Restore(
+        [&] { Diags.setSuppressAllDiagnostics(WasQuiet); });
+    RevertingTentativeParsingAction Peek(*this);
+    LexTemplateFunctionForLateParsing(Toks);
+  }
+  for (size_t I = 0; I != Toks.size(); ++I) {
+    const Token &T = Toks[I];
+    // A scope already annotated is not looked into: the body is parsed here.
+    if (T.isOneOf(tok::annot_cppverify, tok::annot_cxxscope))
+      return true;
+    if (T.isNot(tok::identifier))
+      continue;
+    const IdentifierInfo *II = T.getIdentifierInfo();
+    if (II->isStr("cppverify"))
+      return true;
+    if (I + 1 == Toks.size() || Toks[I + 1].isNot(tok::coloncolon))
+      continue;
+    LookupResult Named(Actions, II, T.getLocation(),
+                       Sema::LookupNamespaceName);
+    Named.suppressDiagnostics();
+    Actions.LookupName(Named, getCurScope());
+    if (const auto *Alias = Named.getAsSingle<NamespaceAliasDecl>();
+        Alias && isCppVerifyNamespace(Alias->getNamespace()))
+      return true;
+  }
+  return false;
+}
+
 bool Parser::isFunctionContractClause() {
   // Anything written cppverify:: after a declarator is parsed as a clause;
   // a construct of another kind is diagnosed there.
@@ -356,6 +393,7 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
   PendingClauseProofs.clear();
   if (!D.isFunctionDeclarator() || !isFunctionContractClause())
     return;
+  Clauses.Present = true;
 
   // Re-enter function parameters into scope so contract conditions can
   // reference them. This mirrors ParseTrailingRequiresClauseWithScope in

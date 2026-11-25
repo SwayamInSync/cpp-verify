@@ -1,4 +1,5 @@
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -verify %s
+// RUN: %clang_cc1 -std=c++17 -triple x86_64-pc-windows-msvc -fdelayed-template-parsing -fverify-contracts -verify %s
 // RUN: %clang_cc1 -std=c++17 -fverify-contracts -fno-verify -DALLOWED_ONLY \
 // RUN:   -emit-llvm -o - %s | FileCheck %s --implicit-check-not=poison
 //
