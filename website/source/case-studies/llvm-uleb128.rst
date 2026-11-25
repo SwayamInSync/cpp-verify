@@ -72,8 +72,8 @@ Measured evidence
      - Scope
    * - Complete deductive proof
      - Z3 verified
-     - 328 canonical obligations: 285 across encoder (186), decoder (33), and
-       round trip (66), plus 43 discharging the eleven machine-byte
+     - 395 canonical obligations: 352 across encoder (246), decoder (38), and
+       round trip (68), plus 43 discharging the eleven machine-byte
        ``cppverify::proof`` lemmas (four for each of ten, three for the last)
    * - Reduced length/bounds proof
      - Z3+cvc5 portfolio verified
