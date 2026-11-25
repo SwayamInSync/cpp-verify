@@ -31,7 +31,7 @@ Without `--recurse-submodules`, run `git submodule update --init third_party/z3`
 
 The branch `llvm-upstream` holds only untouched LLVM releases: its first commit
 is the `llvmorg-22.1.3` import that `main` starts from, and each later commit
-replaces the tree with the next release (`llvmorg-23.1.3`). `main` merges that
+replaces the tree with the next release (`llvmorg-23.1.3`, `llvmorg-23.1.6`). `main` merges that
 branch, so an upgrade is one merge whose base is the previous release:
 
 ```bash

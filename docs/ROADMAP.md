@@ -1,6 +1,6 @@
 # Roadmap
 
-## Release 0.2.0 (in development, based on LLVM 23.1.3)
+## Release 0.2.0 (in development, based on LLVM 23.1.6)
 
 0.2.0 keeps 0.1's contract language and widens what it can be written
 about. The [release notes](https://swayaminsync.github.io/cpp-verify/release-notes.html)
