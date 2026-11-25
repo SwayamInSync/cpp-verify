@@ -520,13 +520,16 @@ class Evaluator {
   /// depend on what the check evaluated before, so an application the
   /// search leaves undecided is remembered.
   static constexpr uint64_t HeightSearchSteps = 1 << 22;
+  /// The greatest height tried, as many as a quantifier's probes.
+  static constexpr uint64_t MaxDerivationHeight = 1024;
   /// The step at which the innermost search of derivation heights ends, and
   /// that it did: like a spent slice, only the search that set the limit
   /// recovers from it.
-  /// The greatest height tried, as many as a quantifier's probes.
-  static constexpr uint64_t MaxDerivationHeight = 1024;
   uint64_t HeightSearchEnd = UINT64_MAX;
   bool HeightSearchSpent = false;
+  /// The definition exists(h, P.step(h, x)) of the inductive predicate being
+  /// evaluated: the quantifier whose witnesses are derivation heights.
+  const LogicExpr *DerivationHeights = nullptr;
   /// Terms a quantifier body may grow to by unfolding definitions.
   static constexpr uint64_t MaxUnfoldedTerms = 20000;
 
@@ -1879,10 +1882,13 @@ class Evaluator {
       if (!Failure.empty())
         return std::nullopt;
       // A witness still decides it: a value where the body holds proves an
-      // exists, one where it fails refutes a forall (an inductive
-      // predicate's derivation height, for one). The values where the
-      // body's comparisons change, once its non-recursive applications are
-      // unfolded, come first, then values near zero.
+      // exists, one where it fails refutes a forall. An inductive
+      // predicate's derivation heights have an order of their own.
+      if (E == DerivationHeights)
+        return derivationHeight(*E);
+      // The values where the body's comparisons change, once its
+      // non-recursive applications are unfolded, come first, then values
+      // near zero.
       std::set<CertInt> Candidates = candidateWitnesses(E);
       std::vector<CertInt> Binders(Candidates.begin(), Candidates.end());
       for (unsigned I = 0; I != Limits.QuantifierProbe; ++I)
@@ -1998,8 +2004,9 @@ class Evaluator {
     return LogicValue::boolean(*Decided ? !Forall : Forall);
   }
 
-  /// An inductive predicate at its arguments, by its definition
-  /// exists(h, P.step(h, x)): true once a height shows a derivation. A
+  /// The witnesses tried for an inductive predicate's definition
+  /// exists(h, P.step(h, x)), once the exact analyses of a quantifier have
+  /// not decided it: true once a height shows a derivation. A
   /// derivation of height h is one of every greater height, since
   /// P.step(h, x) is h > 0 && F with the group's applications read at
   /// h - 1 and F is monotone in them, so doubling heights find whatever any
@@ -2795,12 +2802,13 @@ class Evaluator {
       if (Function.Unfolding)
         HeightSearchEnd = std::min(OuterEnd, Steps + HeightSearchSteps);
       const LogicExpr *Definition = Function.StepDefinition.get();
+      const LogicExpr *OuterHeights = DerivationHeights;
       if (Function.Unfolding && Definition->K == LogicExpr::Exists &&
           Definition->Children.size() == 1)
-        Value = derivationHeight(*Definition);
-      else
-        Value = coerce(eval(Definition), Definition->Sort, Function.ResultSort,
-                       isSigned(Function.ResultSort));
+        DerivationHeights = Definition;
+      Value = coerce(eval(Definition), Definition->Sort, Function.ResultSort,
+                     isSigned(Function.ResultSort));
+      DerivationHeights = OuterHeights;
       HeightSearchEnd = OuterEnd;
       // This search's own limit ended it, not one around it: the heights
       // tried show no derivation.
