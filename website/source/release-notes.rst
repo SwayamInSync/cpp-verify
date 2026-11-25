@@ -1059,7 +1059,8 @@ height is one of every greater height. It now tries doubling heights, under
 a limit of work of its own, so the answer is the same for every
 counterexample and is kept: the claim reports in 0.2 s with the same
 message. Claims the old search decided slowly are faster too
-(``reach(1, 100)`` over a graph of infinitely many nodes: 9 s, now 3 s), and
+(``reach(1, 100)`` over a graph of infinitely many nodes: 9 s, now 3 to
+6 s), and
 some it could not decide are decided (``reach(1, 200)``)
 (:doc:`language/ghost-proofs`).
 
