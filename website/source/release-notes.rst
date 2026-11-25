@@ -1142,8 +1142,17 @@ fails the job. The first run found the counterexample checker overflowing
 its stack in 11 programs, since AddressSanitizer makes each level of its
 nesting take many times the stack: the checker now continues on a fresh
 stack once half of its own is used, so its nesting limit holds in every
-build. It found no other memory error or undefined behavior in the verifier
-(:doc:`language/tooling`).
+build. It found no other memory error or undefined behavior in the verifier.
+A program the verifier dies on without a sanitizer's report, such as a
+failed assertion, fails the job too, and a program that gives no result in
+time is reported with the stack of every thread and the queries it was
+solving (:doc:`language/tooling`).
+
+**The exhaustive ULEB128 decoder runs.** The suite skipped
+``llvm_uleb128_decoder_exhaustive.cpp``, which classifies every input of
+each length up to 11 and grew past 60 GB while lowering. It now verifies in
+about 70 s within 4 GB and runs with the suite on Linux, inside an 8 GB
+address space.
 
 **The archive reader is fuzzed every night.** An archive given to
 ``--obligation-in`` is untrusted input. libFuzzer now runs the reader under

@@ -32,18 +32,47 @@ export UBSAN_OPTIONS=print_stacktrace=1
 export TSAN_OPTIONS="suppressions=$HERE/cppverify-tsan.supp second_deadlock_stack=1"
 
 # A runtime that hangs reports nothing, so a program without a result
-# within the time limit is reported too.
+# within the time limit is reported too, and so is one the verifier dies on
+# (an assertion, a trap, a signal no sanitizer intercepts): a shell reports a
+# death by signal N as status 128 + N. A test that crashes the verifier on
+# purpose says so with "__debug crash".
 case $MODE in
   address) REPORT='ERROR: AddressSanitizer|runtime error:' ;;
   thread) REPORT='WARNING: ThreadSanitizer|ERROR: ThreadSanitizer|ThreadSanitizer shadow stack' ;;
   *) echo "unknown mode $MODE" >&2; exit 2 ;;
 esac
-REPORT="$REPORT|cppverify-sanitize: no result"
+SANITIZER=$REPORT
+REPORT="$REPORT|cppverify-sanitize: no result|cppverify-sanitize: the verifier died"
+
+# A program lit never runs, or does not run under this sanitizer, is left
+# out: its UNSUPPORTED line says so.
+case $MODE in
+  address) FEATURE=asan ;;
+  thread) FEATURE=tsan ;;
+esac
+export SKIPPED="^// UNSUPPORTED: (.*[ ,])?(true|$FEATURE)(,|\$)"
+
+# The seconds a program may take.
+export LIMIT=${CPPVERIFY_SANITIZE_LIMIT:-900}
+
+# The stack of every thread of a process, by gdb where it may attach: as
+# this user, or as root where sudo asks no password (CI runners).
+stacks() {
+  echo "cppverify-sanitize: the threads of the verifier after $LIMIT s:"
+  command -v gdb > /dev/null || { echo "(gdb is not installed)"; return; }
+  local trace
+  trace=$(gdb -p "$1" -batch -ex "thread apply all bt 40" 2>&1)
+  if echo "$trace" | grep -q "Could not attach" && sudo -n true 2> /dev/null; then
+    trace=$(sudo -n gdb -p "$1" -batch -ex "thread apply all bt 40" 2>&1)
+  fi
+  echo "$trace" | tail -n 800
+}
+export -f stacks
 
 run() {
   local file=$1 name extra=()
   name=$(echo "${file#$TESTS/}" | tr / _)
-  grep -q '^// UNSUPPORTED: true' "$file" && return 0
+  grep -q -E "$SKIPPED" "$file" && return 0
   if [ "$MODE" = thread ]; then
     extra=(--jobs=4 "--proof-cache=$OUT/cache-$name")
     if grep -q -E -- '--backend[= ]race' "$file" && command -v cvc5 > /dev/null; then
@@ -52,11 +81,35 @@ run() {
   else
     extra=(--jobs=2)
   fi
-  timeout -k 60 900 "$CPPVERIFY" --timeout=5000 "${extra[@]}" "$file" -- \
-    "-I$TESTS/suite/Inputs" > "$OUT/$name.txt" 2>&1
-  local status=$?
-  if [ $status -eq 124 ] || [ $status -eq 137 ]; then
-    echo "cppverify-sanitize: no result within 900 s (status $status)" >> "$OUT/$name.txt"
+  # Every query is written as a script before it is solved, and the scripts
+  # of a program that gives no result are kept: the last ones written are
+  # the queries it was solving.
+  "$CPPVERIFY" --timeout=5000 "--dump-smt2=$OUT/smt-$name" "${extra[@]}" \
+    "$file" -- "-I$TESTS/suite/Inputs" > "$OUT/$name.txt" 2>&1 &
+  local pid=$! watchdog status
+  # After the limit: where every thread is, before the program is stopped.
+  # A hang that happens one night in ten cannot be found any other way.
+  # The watchdog ends at once when the program does: stopped while it
+  # waits, it stops its timer and goes no further, so it never reports a
+  # program that gave its result.
+  (
+    trap 'kill $timer 2> /dev/null; exit 0' TERM
+    sleep "$LIMIT" &
+    timer=$!
+    wait $timer
+    stacks $pid >> "$OUT/$name.txt" 2>&1
+    echo "cppverify-sanitize: no result within $LIMIT s" >> "$OUT/$name.txt"
+    kill -KILL $pid 2> /dev/null
+  ) > /dev/null 2>&1 &
+  watchdog=$!
+  wait $pid 2> /dev/null
+  status=$?
+  kill $watchdog 2> /dev/null
+  wait $watchdog 2> /dev/null
+  grep -q '^cppverify-sanitize: no result' "$OUT/$name.txt" && return 0
+  rm -rf "$OUT/smt-$name"
+  if [ $status -ge 128 ] && ! grep -q '__debug crash' "$file"; then
+    echo "cppverify-sanitize: the verifier died (status $status)" >> "$OUT/$name.txt"
   fi
   return 0
 }
@@ -66,15 +119,30 @@ find "$TESTS" -name '*.cpp' -not -path '*/Inputs/*' -print0 |
   xargs -0 -P "$PARALLEL" -I{} bash -c 'run "$1"' _ {}
 
 reports=$(grep -l -E "$REPORT" "$OUT"/*.txt)
-programs=$(find "$TESTS" -name '*.cpp' -not -path '*/Inputs/*' -exec grep -L '^// UNSUPPORTED: true' {} + | wc -l)
+programs=$(find "$TESTS" -name '*.cpp' -not -path '*/Inputs/*' -exec grep -L -E "$SKIPPED" {} + | wc -l)
 if [ -z "$reports" ]; then
   echo "$MODE: no reports in $programs programs"
   exit 0
 fi
 for report in $reports; do
   echo "=== $(basename "$report" .txt)"
-  grep -m1 -A40 -E "$REPORT" "$report"
+  # A sanitizer's report follows its first line; what the script itself
+  # reports is the end of the program's output.
+  if grep -q -E "$SANITIZER" "$report"; then
+    grep -m1 -A40 -E "$SANITIZER" "$report"
+  else
+    tail -n 41 "$report"
+  fi
 done
 echo "$MODE: reports in $(echo "$reports" | wc -l) of $programs programs"
 mkdir -p sanitizer-reports && cp $reports sanitizer-reports/
+# The queries a program without a result wrote last, newest first.
+for report in $reports; do
+  scripts=$OUT/smt-$(basename "$report" .txt)
+  [ -d "$scripts" ] || continue
+  kept=$PWD/sanitizer-reports/$(basename "$scripts")
+  mkdir -p "$kept"
+  (cd "$scripts" && find . -name '*.smt2' -printf '%T@ %p\n' | sort -rn |
+     head -n 40 | cut -d' ' -f2- | xargs -r cp --parents -t "$kept")
+done
 exit 1

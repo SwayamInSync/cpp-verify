@@ -3703,8 +3703,8 @@ fresh context, the API's or `z3`'s, the same assertions are `unknown`
   atomics, does not report, and it cannot see a race on a Z3 object that two
   threads share. One sweep took 3900 to 4800 CPU seconds in three runs, most
   of each program's time in Z3, and a program at most 3.5 GB; only
-  `llvm_uleb128_decoder_exhaustive.cpp`, which lit does not run, needed
-  17.6 GB, more than a runner has.
+  `llvm_uleb128_decoder_exhaustive.cpp`, which the sanitizer runs leave
+  out, needed 17.6 GB, more than a runner has.
 
 Every new semantic feature needs layered oracles rather than a solver result
 alone:

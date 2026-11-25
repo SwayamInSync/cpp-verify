@@ -2182,10 +2182,14 @@ race backend runs on it when cvc5 is installed, so the thread pool, the cache,
 and the races between solvers run concurrently. A program uses at most about
 3.5 GB under ThreadSanitizer. In either mode a program that gives no result
 within 900 s is reported too (``cppverify-sanitize: no result within 900 s``),
-since a sanitizer runtime that hangs prints nothing. ``cppverify-tsan.supp``
-suppresses the reports inside Z3 4.13.4 itself and the calls LLVM's crash
-handler makes in a signal handler, each with its reason. To look at one program, run it with the same
-options:
+since a sanitizer runtime that hangs prints nothing, with the stack of every
+thread at that moment where ``gdb`` may attach and the last queries it wrote
+(``--dump-smt2``), and so is a program the verifier dies on without a
+sanitizer's report, such as a failed assertion (``cppverify-sanitize: the
+verifier died (status 134)``). ``cppverify-tsan.supp`` suppresses the
+reports inside Z3 4.13.4 itself and the calls LLVM's crash handler makes in
+a signal handler, each with its reason. To look at one program, run it with
+the same options:
 
 .. code-block:: bash
 
