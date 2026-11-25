@@ -1,0 +1,23 @@
+name: Unsupported construct
+description: C++ the verifier rejects or reports Unresolved (construct.unsupported) that you would like verified.
+body:
+  - type: textarea
+    id: input
+    attributes:
+      label: Input
+      description: A small function that uses the construct, with the contract you would like proved.
+      render: cpp
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What cpp-verify says
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: use
+    attributes:
+      label: Where it comes from
+      description: The code base or the idiom it is common in, which helps decide what to support first.
