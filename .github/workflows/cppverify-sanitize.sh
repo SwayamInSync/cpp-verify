@@ -44,10 +44,18 @@ esac
 SANITIZER=$REPORT
 REPORT="$REPORT|cppverify-sanitize: no result|cppverify-sanitize: the verifier died"
 
+# A program lit never runs, or does not run under this sanitizer, is left
+# out: its UNSUPPORTED line says so.
+case $MODE in
+  address) FEATURE=asan ;;
+  thread) FEATURE=tsan ;;
+esac
+export SKIPPED="^// UNSUPPORTED: (.*[ ,])?(true|$FEATURE)(,|\$)"
+
 run() {
   local file=$1 name extra=()
   name=$(echo "${file#$TESTS/}" | tr / _)
-  grep -q '^// UNSUPPORTED: true' "$file" && return 0
+  grep -q -E "$SKIPPED" "$file" && return 0
   if [ "$MODE" = thread ]; then
     extra=(--jobs=4 "--proof-cache=$OUT/cache-$name")
     if grep -q -E -- '--backend[= ]race' "$file" && command -v cvc5 > /dev/null; then
@@ -72,7 +80,7 @@ find "$TESTS" -name '*.cpp' -not -path '*/Inputs/*' -print0 |
   xargs -0 -P "$PARALLEL" -I{} bash -c 'run "$1"' _ {}
 
 reports=$(grep -l -E "$REPORT" "$OUT"/*.txt)
-programs=$(find "$TESTS" -name '*.cpp' -not -path '*/Inputs/*' -exec grep -L '^// UNSUPPORTED: true' {} + | wc -l)
+programs=$(find "$TESTS" -name '*.cpp' -not -path '*/Inputs/*' -exec grep -L -E "$SKIPPED" {} + | wc -l)
 if [ -z "$reports" ]; then
   echo "$MODE: no reports in $programs programs"
   exit 0
