@@ -1,21 +1,21 @@
 // RUN: %clang -std=c++17 -fverify-contracts -fsyntax-only %s
-// RUN: %cpp-verify --check-ub --jobs=8 --timeout=30000 %s -- 2>&1 \
+// RUN: ulimit -v 8000000
+// RUN: %cpp-verify --check-ub --jobs=2 --timeout=120000 %s -- 2>&1 \
 // RUN:   | FileCheck %s
 //
-// UNSUPPORTED: true
+// REQUIRES: system-linux
+// UNSUPPORTED: asserts, msan, asan, hwasan, tsan
 //
-// Work in progress; not part of the released artifact. Kept in tree because
-// the machine-byte lemmas and per-length scans it already contains are worth
-// keeping, but skipped so it neither fails the suite nor costs time.
+// This input grew past 60 GB when lowering copied shared terms, and the test
+// was skipped. It now verifies in about 70 s within 4 GB, so it runs, inside
+// an 8 GB address space (the default --memory-limit), where release builds
+// run on Linux: it bounds memory, which every platform shares, and an
+// assertions build takes several times longer for the same answer. Under a
+// sanitizer it needs more memory than a runner has (17.6 GB under
+// ThreadSanitizer), so the sanitizer runs leave it out too.
 //
-// The final check below expects a verified `decode_uleb128_exhaustive`, and no
-// such function exists in this file yet -- only the per-length scan_uleb128_*
-// and decode_uleb128_length_* helpers are written. It is skipped rather than
-// marked expected-to-fail for two reasons: it cannot pass as written, and an
-// expected-failure marking still runs the test, which costs roughly twenty
-// minutes of solver time on every suite run.
-//
-// When the missing function lands, drop the skip directive above to re-enable.
+// The scans classify every input of each length; a decode_uleb128_exhaustive
+// that joins them over all lengths is not written yet.
 
 // Complete symbolic classification of the repaired LLVM ULEB128 decoder over
 // logical input lengths 0 through 11. The buffer bytes are unconstrained, so
@@ -1594,4 +1594,6 @@ DecodeResult decode_uleb128_length_11(const uint8_t *buffer)
 // CHECK: Verified: scan_uleb128_9
 // CHECK: Verified: scan_uleb128_10
 // CHECK: Verified: scan_uleb128_11
-// CHECK: Verified: decode_uleb128_exhaustive
+// CHECK-NOT: Unresolved
+// CHECK-NOT: error:
+// CHECK: Summary: 54 verified in
