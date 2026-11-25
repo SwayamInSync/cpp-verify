@@ -1289,8 +1289,9 @@ under any.
 
 The summary counts the replayed functions the run reports, as its other
 counts do (not the generated proofs that hold, nor what ``--function``
-leaves out), ``--time-report`` marks each of them ``(proof cache)`` (``"proof_cache": true`` in its JSON records), and a
-replayed verdict shows every query as answered, ``[cache=27/27]``.
+leaves out), ``--time-report`` marks each of them ``(proof cache)``
+(``"proof_cache": true`` in its JSON records), and a replayed verdict shows
+every query as answered, ``[cache=27/27]``.
 
 What an edit verifies again follows from the key:
 
@@ -1330,11 +1331,11 @@ proved.
 
 A verdict ``Unresolved`` with ``solver.timeout`` costs every run its whole
 limit, so it is recorded too, with the limits it was reached under
-(``--timeout``, the limit for collections, ``--function-timeout``), the
-number of workers (``--jobs``), and where the function and everything it
-names is in the source, since the verdict names those places. A run reads
-it when none of its limits is larger, it has no more workers, and nothing
-has moved, and says so:
+(``--timeout``, the limit for collections, ``--function-timeout``, the time
+for checking a counterexample), the number of workers (``--jobs``), and
+where the function and everything it names is in the source, since the
+verdict names those places. A run reads it when none of its limits is
+larger, it has no more workers, and nothing has moved, and says so:
 
 .. code-block:: console
 
@@ -1352,7 +1353,8 @@ solved side by side, and any edit that moves the function or what it names.
 A timeout also depends on the machine's load, which no record holds, so a
 recorded one may be a proof on a quieter day: a run with
 ``--proof-cache-check`` verifies every recorded function again and replaces
-the record of a timeout with what it finds.
+the record of a timeout with what it finds, or removes it when that is
+neither a proof nor a timeout.
 
 Runs that write something of each function do not use records: the dumps
 (``--dump-ir``, ``--dump-smt2`` is unaffected since nothing is solved),
