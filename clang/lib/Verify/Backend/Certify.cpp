@@ -514,11 +514,19 @@ class Evaluator {
   };
   std::vector<Fixpoint *> Fixpoints;
   static constexpr size_t MaxFixpointArguments = 1024;
-  /// Steps the search of derivation heights may take once the fixpoint's
-  /// exploration was cut: it repeats that exploration height by height, so
-  /// it rarely finds more, and its end must not depend on what the check
-  /// evaluated before it.
-  static constexpr uint64_t HeightSearchSteps = FirstSlice;
+  /// Steps one search of derivation heights may take, once the fixpoint's
+  /// exploration was cut. It is a limit of work, not a slice: a slice is
+  /// divided among the tries of every search inside it. Its end does not
+  /// depend on what the check evaluated before, so an application the
+  /// search leaves undecided is remembered.
+  static constexpr uint64_t HeightSearchSteps = 1 << 22;
+  /// The step at which the innermost search of derivation heights ends, and
+  /// that it did: like a spent slice, only the search that set the limit
+  /// recovers from it.
+  /// The greatest height tried, as many as a quantifier's probes.
+  static constexpr uint64_t MaxDerivationHeight = 1024;
+  uint64_t HeightSearchEnd = UINT64_MAX;
+  bool HeightSearchSpent = false;
   /// Terms a quantifier body may grow to by unfolding definitions.
   static constexpr uint64_t MaxUnfoldedTerms = 20000;
 
@@ -530,7 +538,7 @@ class Evaluator {
 
   /// A budget ran out: the failure is not the term's, so nothing below the
   /// search that set the budget may recover from it.
-  bool spent() const { return Exhausted || SliceSpent; }
+  bool spent() const { return Exhausted || SliceSpent || HeightSearchSpent; }
 
   /// Runs \p Count tries fairly: each gets a slice of evaluation steps in
   /// turn, the slices doubling every round, so whichever settles cheaply is
@@ -584,7 +592,7 @@ class Evaluator {
             return true;
           continue;
         }
-        if (Exhausted || (SliceSpent && OuterEnd < Steps))
+        if (Exhausted || HeightSearchSpent || (SliceSpent && OuterEnd < Steps))
           return std::nullopt;
         if (SliceSpent)
           Again.push_back(Index);
@@ -1990,6 +1998,55 @@ class Evaluator {
     return LogicValue::boolean(*Decided ? !Forall : Forall);
   }
 
+  /// An inductive predicate at its arguments, by its definition
+  /// exists(h, P.step(h, x)): true once a height shows a derivation. A
+  /// derivation of height h is one of every greater height, since
+  /// P.step(h, x) is h > 0 && F with the group's applications read at
+  /// h - 1 and F is monotone in them, so doubling heights find whatever any
+  /// height up to the last would. Trying every height in turn, as for a
+  /// quantifier of unknown shape, spent the search on two thousand
+  /// candidates of which the greatest alone decides.
+  std::optional<LogicValue> derivationHeight(const LogicExpr &Heights) {
+    struct State {
+      std::string Failure;
+      bool LimitInDefinition;
+      const LogicExpr *Deep;
+      const LogicExpr *Wide;
+    };
+    const State Saved{"", LimitInDefinition, Deep, Wide};
+    std::optional<State> First;
+    for (uint64_t Height = 1; Height <= MaxDerivationHeight; Height *= 2) {
+      ++Instances;
+      Scope.emplace_back(
+          Heights.Binder,
+          LogicValue::integer(CertInt(static_cast<int64_t>(Height))));
+      std::optional<bool> Holds = truthOf(Heights.Children[0].get());
+      Scope.pop_back();
+      if (Holds && *Holds)
+        return LogicValue::boolean(true);
+      if (Holds)
+        continue;
+      if (spent())
+        return std::nullopt;
+      // A height that cannot be evaluated says nothing of a greater one,
+      // whose derivation may not need what this one could not decide.
+      if (!First)
+        First = State{Failure, LimitInDefinition, Deep, Wide};
+      Failure = Saved.Failure;
+      LimitInDefinition = Saved.LimitInDefinition;
+      Deep = Saved.Deep;
+      Wide = Saved.Wide;
+    }
+    if (First) {
+      Failure = First->Failure;
+      LimitInDefinition = First->LimitInDefinition;
+      Deep = First->Deep;
+      Wide = First->Wide;
+      return std::nullopt;
+    }
+    return limit("no derivation was found among the heights tried");
+  }
+
   const LogicFunctionDecl *function(const std::string &Identity) const {
     if (auto It = Module.LogicFunctions.find(Identity);
         It != Module.LogicFunctions.end())
@@ -2734,18 +2791,23 @@ class Evaluator {
       for (unsigned I = 0; I != Args.size(); ++I)
         Scope.emplace_back(Function.Parameters[I].Name, Args[I]);
       Active.push_back(&Function);
-      const uint64_t OuterEnd = SliceEnd;
+      const uint64_t OuterEnd = HeightSearchEnd;
       if (Function.Unfolding)
-        SliceEnd = std::min(OuterEnd, Steps + HeightSearchSteps);
-      Value = coerce(eval(Function.StepDefinition.get()),
-                     Function.StepDefinition->Sort, Function.ResultSort,
-                     isSigned(Function.ResultSort));
-      SliceEnd = OuterEnd;
-      // The search's own slice ended, not one around it: the heights tried
-      // show no derivation.
-      if (!Value && SliceSpent && !Exhausted && Steps <= OuterEnd) {
-        SliceSpent = false;
-        LimitInDefinition = true;
+        HeightSearchEnd = std::min(OuterEnd, Steps + HeightSearchSteps);
+      const LogicExpr *Definition = Function.StepDefinition.get();
+      if (Function.Unfolding && Definition->K == LogicExpr::Exists &&
+          Definition->Children.size() == 1)
+        Value = derivationHeight(*Definition);
+      else
+        Value = coerce(eval(Definition), Definition->Sort, Function.ResultSort,
+                       isSigned(Function.ResultSort));
+      HeightSearchEnd = OuterEnd;
+      // This search's own limit ended it, not one around it: the heights
+      // tried show no derivation.
+      if (HeightSearchSpent && Steps <= OuterEnd) {
+        HeightSearchSpent = false;
+        if (!Value && !Exhausted && !SliceSpent)
+          LimitInDefinition = true;
       }
       Active.pop_back();
       Scope.resize(SavedSize);
@@ -3391,6 +3453,10 @@ public:
     }
     if (NextClockCheck <= Steps)
       NextClockCheck = Steps + 4096;
+    if (HeightSearchSpent || HeightSearchEnd < Steps) {
+      HeightSearchSpent = true;
+      return fail("the search of derivation heights reached its limit");
+    }
     if (SliceEnd < Steps) {
       SliceSpent = true;
       return fail("the evaluation slice was spent");
