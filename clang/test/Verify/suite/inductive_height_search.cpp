@@ -2,7 +2,8 @@
 //
 // From an argument, this predicate's derivations reach infinitely many
 // arguments, so the check of a counterexample decides it by the height of a
-// derivation. A derivation of height h is one of every greater height, so
+// derivation, once the exact analyses of its definition's quantifier have
+// not. A derivation of height h is one of every greater height, so
 // the heights tried double. reach(1, 100) has a derivation of height 9:
 // trying every height in turn found it in 9 s, and a search given a small
 // slice of steps, which its two thousand tries shared, did not find it.
