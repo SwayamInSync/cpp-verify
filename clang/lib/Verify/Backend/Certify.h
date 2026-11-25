@@ -311,11 +311,12 @@ struct RefinementDecision {
 /// Definition instances that let a solver compute the applications \p Query
 /// states with closed arguments: one at each such application and at every
 /// application its evaluation reaches. Hidden functions are left out, and an
-/// application too deep to evaluate contributes nothing.
+/// application too deep to evaluate, or whose instances would bring the total
+/// above \p MaxInstances, contributes nothing.
 std::vector<DefinitionInstance>
 closedApplicationInstances(const ObligationModule &Module,
-                           const LogicExpr &Query,
-                           const CertifyLimits &Limits = {});
+                           const LogicExpr &Query, const CertifyLimits &Limits,
+                           size_t MaxInstances);
 
 /// Counterexample-guided refinement shared by the SMT adapters. Each round
 /// certifies a model and answers disputed applications with instances of

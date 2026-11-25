@@ -893,6 +893,10 @@ got:
    (get-model)
    ; cpp-verify: sat
 
+The second line ends with ``, in a proof by induction`` for a query of an
+automatic induction, and with ``, to confirm a counterexample by proof`` for
+one that confirms a counterexample whose values could not be computed.
+
 .. code-block:: text
 
    $ cd queries && z3 clamp-14e9c9/postcondition-5-23.z3-d86b7e26.smt2

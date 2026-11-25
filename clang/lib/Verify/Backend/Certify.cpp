@@ -3946,7 +3946,8 @@ std::optional<LogicValue> verify::evaluateTerm(const ObligationModule &Module,
 std::vector<DefinitionInstance>
 verify::closedApplicationInstances(const ObligationModule &Module,
                                    const LogicExpr &Query,
-                                   const CertifyLimits &Limits) {
+                                   const CertifyLimits &Limits,
+                                   size_t MaxInstances) {
   std::vector<const LogicExpr *> Closed;
   std::vector<const LogicExpr *> Work{&Query};
   while (!Work.empty()) {
@@ -3972,8 +3973,7 @@ verify::closedApplicationInstances(const ObligationModule &Module,
       if (!Definitions.eval(Call))
         continue;
       std::vector<DefinitionInstance> Reached = Definitions.takeEvaluated();
-      if (Instances.size() + Reached.size() >
-          DefinitionRefinement::MaxInstances)
+      if (Instances.size() + Reached.size() > MaxInstances)
         continue;
       for (DefinitionInstance &Instance : Reached)
         if ((Instance.Of != DefinitionInstance::Kind::Definition ||

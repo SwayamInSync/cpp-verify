@@ -3388,8 +3388,12 @@ VerifyResult Z3Encoder::decideModule(const ObligationModule &Module,
     CertifyLimits Limits;
     if (TimeoutMs > 0)
       Limits.Deadline = QueryStart + std::chrono::milliseconds(TimeoutMs);
-    for (const DefinitionInstance &Instance :
-         closedApplicationInstances(Module, Asked, checkLimits(Limits)))
+    // Z3 cannot be stopped while it takes in facts at the base level, so an
+    // attempt gets no more of them here than in a refinement round.
+    for (const DefinitionInstance &Instance : closedApplicationInstances(
+             Module, Asked, checkLimits(Limits),
+             ProofOnly ? DefinitionRefinement::MaxProofRoundInstances
+                       : DefinitionRefinement::MaxInstances))
       if (std::optional<z3::expr> Equation = definitionInstance(Instance))
         Solver.add(*Equation);
   }
