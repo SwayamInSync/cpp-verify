@@ -81,8 +81,11 @@ run() {
   else
     extra=(--jobs=2)
   fi
-  "$CPPVERIFY" --timeout=5000 "${extra[@]}" "$file" -- \
-    "-I$TESTS/suite/Inputs" > "$OUT/$name.txt" 2>&1 &
+  # Every query is written as a script before it is solved, and the scripts
+  # of a program that gives no result are kept: the last ones written are
+  # the queries it was solving.
+  "$CPPVERIFY" --timeout=5000 "--dump-smt2=$OUT/smt-$name" "${extra[@]}" \
+    "$file" -- "-I$TESTS/suite/Inputs" > "$OUT/$name.txt" 2>&1 &
   local pid=$! watchdog status
   # After the limit: where every thread is, before the program is stopped.
   # A hang that happens one night in ten cannot be found any other way.
@@ -99,6 +102,7 @@ run() {
   kill $watchdog 2> /dev/null
   wait $watchdog 2> /dev/null
   grep -q '^cppverify-sanitize: no result' "$OUT/$name.txt" && return 0
+  rm -rf "$OUT/smt-$name"
   if [ $status -ge 128 ] && ! grep -q '__debug crash' "$file"; then
     echo "cppverify-sanitize: the verifier died (status $status)" >> "$OUT/$name.txt"
   fi
@@ -127,4 +131,13 @@ for report in $reports; do
 done
 echo "$MODE: reports in $(echo "$reports" | wc -l) of $programs programs"
 mkdir -p sanitizer-reports && cp $reports sanitizer-reports/
+# The queries a program without a result wrote last, newest first.
+for report in $reports; do
+  scripts=$OUT/smt-$(basename "$report" .txt)
+  [ -d "$scripts" ] || continue
+  kept=$PWD/sanitizer-reports/$(basename "$scripts")
+  mkdir -p "$kept"
+  (cd "$scripts" && find . -name '*.smt2' -printf '%T@ %p\n' | sort -rn |
+     head -n 40 | cut -d' ' -f2- | xargs -r cp --parents -t "$kept")
+done
 exit 1
