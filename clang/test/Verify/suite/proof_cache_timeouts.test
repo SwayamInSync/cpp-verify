@@ -27,8 +27,21 @@
 # AGAIN: base.cpp:8:3: Unresolved: matching_loop [backend=z3] {{.*}}[reason=solver.timeout]
 # AGAIN-NOT: this verdict is the proof cache's record
 
+# So does more time for checking a counterexample: one left unchecked for
+# want of it sends a function on to queries that may time out.
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --certify-timeout=0 --proof-cache=%t/jobs %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=AGAIN
+
 # So does --proof-cache-check, at the same limits.
 # RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache-check --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=AGAIN
+
+# When that run finds neither a proof nor a timeout (here it runs out of
+# memory, a limit no record holds), the record goes, and the next run
+# verifies the function.
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/gone %t/base.cpp -- > /dev/null 2>&1
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/gone %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=WARM
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache-check --memory-limit=1 --proof-cache=%t/gone %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=MEMORY
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/gone %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=AGAIN
+# MEMORY: Unresolved: matching_loop [backend=z3] {{.*}}[reason=solver.memory-limit]
 
 # JSON carries the same record.
 # RUN: not %cpp-verify --jobs=1 --timeout=1500 --diagnostics-format=json --proof-cache=%t/json %t/base.cpp -- > %t/json.cold 2>/dev/null
