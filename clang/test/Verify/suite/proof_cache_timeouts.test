@@ -1,6 +1,7 @@
 # A verdict left Unresolved for want of time is recorded in the proof cache
-# with the limits it was reached under and with where the function is. A run
-# whose limits are no larger reads it; a larger limit, or the function
+# with the limits and the workers it was reached under and with where the
+# function is. A run whose limits are no larger, with no more workers, reads
+# it; a larger limit, more workers, --proof-cache-check, or the function
 # anywhere else, verifies again.
 
 # RUN: rm -rf %t && split-file %s %t
@@ -15,8 +16,19 @@
 # RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=WARM
 # RUN: not %cpp-verify --jobs=1 --timeout=700 --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=WARM
 # WARM: base.cpp:8:3: Unresolved: matching_loop [backend=z3] {{.*}}[reason=solver.timeout] (proof obligation {{.*}}::assertion@8:3: timeout)
-# WARM-NEXT: note: this verdict is the proof cache's record of a run with --timeout=1500; a larger limit, or a change to the function, verifies it again
+# WARM-NEXT: note: this verdict is the proof cache's record of a run with --timeout=1500; a larger limit, more --jobs, a change to the function, or --proof-cache-check verifies it again
 # WARM: Summary: 2 verified, 1 unresolved (solver.timeout 1), 2 reused from the proof cache in
+
+# More workers may finish what one did not: the function is verified again,
+# and a run with fewer reads the new record.
+# RUN: not %cpp-verify --jobs=2 --timeout=1500 --proof-cache=%t/jobs %t/base.cpp -- > /dev/null 2>&1
+# RUN: not %cpp-verify --jobs=3 --timeout=1500 --proof-cache=%t/jobs %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=AGAIN
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache=%t/jobs %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=WARM
+# AGAIN: base.cpp:8:3: Unresolved: matching_loop [backend=z3] {{.*}}[reason=solver.timeout]
+# AGAIN-NOT: this verdict is the proof cache's record
+
+# So does --proof-cache-check, at the same limits.
+# RUN: not %cpp-verify --jobs=1 --timeout=1500 --proof-cache-check --proof-cache=%t/cache %t/base.cpp -- 2>&1 | FileCheck %s --check-prefix=AGAIN
 
 # JSON carries the same record.
 # RUN: not %cpp-verify --jobs=1 --timeout=1500 --diagnostics-format=json --proof-cache=%t/json %t/base.cpp -- > %t/json.cold 2>/dev/null
