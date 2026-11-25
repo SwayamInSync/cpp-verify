@@ -151,6 +151,10 @@ void QueryDump::start(const ObligationModule *Module, const LogicExpr *Query,
     } else {
       OS << "a query built from its obligations";
     }
+    if (Module->Attempt == ModuleAttempt::Induction)
+      OS << ", in a proof by induction";
+    else if (Module->Attempt == ModuleAttempt::Confirmation)
+      OS << ", to confirm a counterexample by proof";
     OS << "\n";
   }
   OS << "; replay: " << Solver << ' ' << Relative << "\n";
