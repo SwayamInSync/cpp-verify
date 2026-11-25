@@ -3020,7 +3020,7 @@ struct RecordReader {
 };
 
 /// Bumped whenever what a record holds, or how a key is made, changes.
-constexpr unsigned ResultRecordVersion = 4;
+constexpr unsigned ResultRecordVersion = 5;
 
 /// The options a function's verdicts depend on, as part of the key of its
 /// record; nothing for a run whose verifications are not recorded. A proof
@@ -4083,6 +4083,16 @@ public:
     auto within = [](uint64_t Asked, uint64_t Recorded) {
       return Recorded == 0 || (Asked != 0 && Asked <= Recorded);
     };
+    // The time one check of a counterexample may take: by default half the
+    // query's, and the query's own for --certify-timeout=0. A counterexample
+    // left unchecked for want of it sends the function on to queries that
+    // may then time out.
+    auto certifyLimit = [&]() -> uint64_t {
+      if (!Opts.CertifyTimeoutMs)
+        return Opts.SolverTimeoutMs / 2;
+      return *Opts.CertifyTimeoutMs ? *Opts.CertifyTimeoutMs
+                                    : Opts.SolverTimeoutMs;
+    };
     // A record holds only what a proof's diagnostics carry. Anything else
     // in a run (a failure, a warning, a place in the source, a confirmation
     // still to make) leaves the run unrecorded, and the function verified
@@ -4254,6 +4264,7 @@ public:
         Head.number(Opts.SolverTimeoutMs);
         Head.number(Opts.CollectionTimeoutMs);
         Head.number(Opts.FunctionTimeoutMs);
+        Head.number(certifyLimit());
         Head.number(Workers);
       }
       Head.number(AllOk);
@@ -4272,10 +4283,12 @@ public:
         TimeLimit = R.number();
         const uint64_t CollectionLimit = R.number();
         const uint64_t FunctionLimit = R.number();
+        const uint64_t CertifyLimit = R.number();
         const uint64_t RecordedWorkers = R.number();
         if (!R.Ok || !within(Opts.SolverTimeoutMs, TimeLimit) ||
             !within(Opts.CollectionTimeoutMs, CollectionLimit) ||
             !within(Opts.FunctionTimeoutMs, FunctionLimit) ||
+            !within(certifyLimit(), CertifyLimit) ||
             Workers > RecordedWorkers)
           return std::nullopt;
       }
@@ -6122,6 +6135,11 @@ public:
         } else if (Record && (!Recorded || !Proved)) {
           // A record that cannot be written costs only the next run's time.
           llvm::consumeError(Results->storeRecord(Key, *Record));
+        } else if (Recorded && !Proved) {
+          // --proof-cache-check, and the function no longer ends for want of
+          // time, nor in a proof: the record of its timeout goes, so that
+          // the next run verifies it.
+          llvm::consumeError(Results->removeRecord(Key));
         }
       }
       Runs[I].Task = nanosecondsSince(Start);
