@@ -356,6 +356,7 @@ void Parser::ParseFunctionContractClauses(ParsingDeclarator &D,
   PendingClauseProofs.clear();
   if (!D.isFunctionDeclarator() || !isFunctionContractClause())
     return;
+  Clauses.Present = true;
 
   // Re-enter function parameters into scope so contract conditions can
   // reference them. This mirrors ParseTrailingRequiresClauseWithScope in
