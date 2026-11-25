@@ -32,13 +32,17 @@ export UBSAN_OPTIONS=print_stacktrace=1
 export TSAN_OPTIONS="suppressions=$HERE/cppverify-tsan.supp second_deadlock_stack=1"
 
 # A runtime that hangs reports nothing, so a program without a result
-# within the time limit is reported too.
+# within the time limit is reported too, and so is one the verifier dies on
+# (an assertion, a trap, a signal no sanitizer intercepts): a shell reports a
+# death by signal N as status 128 + N. A test that crashes the verifier on
+# purpose says so with "__debug crash".
 case $MODE in
   address) REPORT='ERROR: AddressSanitizer|runtime error:' ;;
   thread) REPORT='WARNING: ThreadSanitizer|ERROR: ThreadSanitizer|ThreadSanitizer shadow stack' ;;
   *) echo "unknown mode $MODE" >&2; exit 2 ;;
 esac
-REPORT="$REPORT|cppverify-sanitize: no result"
+SANITIZER=$REPORT
+REPORT="$REPORT|cppverify-sanitize: no result|cppverify-sanitize: the verifier died"
 
 run() {
   local file=$1 name extra=()
@@ -57,6 +61,8 @@ run() {
   local status=$?
   if [ $status -eq 124 ] || [ $status -eq 137 ]; then
     echo "cppverify-sanitize: no result within 900 s (status $status)" >> "$OUT/$name.txt"
+  elif [ $status -ge 128 ] && ! grep -q '__debug crash' "$file"; then
+    echo "cppverify-sanitize: the verifier died (status $status)" >> "$OUT/$name.txt"
   fi
   return 0
 }
@@ -73,7 +79,13 @@ if [ -z "$reports" ]; then
 fi
 for report in $reports; do
   echo "=== $(basename "$report" .txt)"
-  grep -m1 -A40 -E "$REPORT" "$report"
+  # A sanitizer's report follows its first line; what the script itself
+  # reports is the end of the program's output.
+  if grep -q -E "$SANITIZER" "$report"; then
+    grep -m1 -A40 -E "$SANITIZER" "$report"
+  else
+    tail -n 41 "$report"
+  fi
 done
 echo "$MODE: reports in $(echo "$reports" | wc -l) of $programs programs"
 mkdir -p sanitizer-reports && cp $reports sanitizer-reports/
