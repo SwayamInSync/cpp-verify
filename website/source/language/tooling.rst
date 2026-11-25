@@ -961,12 +961,16 @@ one target is not a verdict for another. On Windows ``long`` has 32 bits:
 Verifying for a target needs its headers only if the file includes them.
 
 For Windows targets before C++20 the compiler delays parsing a template's
-body until the template is used, as older versions of MSVC did. With
-contracts (``-fverify-contracts``, and so ``cpp-verify``) a template is
-parsed where it is defined on every target, as MSVC does with
-``/permissive-`` and in C++20: its contract belongs to its definition, and
-its body is verified as the standard reads it. ``-fdelayed-template-parsing``
-has no effect there.
+body to the end of the file, as older versions of MSVC did, and code
+written for that needs it (a template that calls a function declared after
+it). With contracts (``-fverify-contracts``, and so ``cpp-verify``) a
+template that has contract clauses, and a ``cppverify::spec`` or
+``cppverify::proof`` template, is parsed where it is defined on every
+target, as MSVC does with ``/permissive-`` and in C++20: its contract
+belongs to that definition, so its body must be standard C++ there. Every
+other template is delayed as without contracts, and the constructs in its
+body (loop contracts, ``cppverify::check``, ghost code) are read when it is
+parsed.
 
 Time limits
 -----------
