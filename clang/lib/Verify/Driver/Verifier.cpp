@@ -3020,7 +3020,7 @@ struct RecordReader {
 };
 
 /// Bumped whenever what a record holds, or how a key is made, changes.
-constexpr unsigned ResultRecordVersion = 3;
+constexpr unsigned ResultRecordVersion = 4;
 
 /// The options a function's verdicts depend on, as part of the key of its
 /// record; nothing for a run whose verifications are not recorded. A proof
@@ -3062,6 +3062,9 @@ std::optional<std::string> resultCacheManifest(const VerifyOptions &Opts) {
   W.number(MaxFailures);
   W.number(ConfirmBound);
   W.number(QuietWithoutFunctions);
+  // A contract without a definition draws a warning unless the run records
+  // contracts for other files to establish.
+  W.number(!ContractsOut.empty());
   return std::move(W.Out);
 }
 
@@ -3109,6 +3112,9 @@ class Verifier {
     bool Reused = false;
   };
   std::vector<FunctionTime> Timings;
+  /// The diagnostics, as a range of Diags, of each function whose verdicts
+  /// were read from the proof cache.
+  std::vector<std::pair<size_t, size_t>> ReusedRuns;
   std::chrono::steady_clock::time_point RunStart =
       std::chrono::steady_clock::now();
   std::optional<std::chrono::steady_clock::time_point> Converted, Verified,
@@ -4071,7 +4077,9 @@ public:
       return SM.getLocForStartOfFile(File).getLocWithOffset(Offset);
     };
     // A limit of 0 is none. A verdict a limit of time caused answers a run
-    // whose limits are no larger than those it was reached under.
+    // whose limits are no larger than those it was reached under, and which
+    // has no more workers: with more, a function's whole query and its
+    // obligations run side by side, and either may finish in time.
     auto within = [](uint64_t Asked, uint64_t Recorded) {
       return Recorded == 0 || (Asked != 0 && Asked <= Recorded);
     };
@@ -4246,6 +4254,7 @@ public:
         Head.number(Opts.SolverTimeoutMs);
         Head.number(Opts.CollectionTimeoutMs);
         Head.number(Opts.FunctionTimeoutMs);
+        Head.number(Workers);
       }
       Head.number(AllOk);
       Head.number(AnyFailed);
@@ -4263,9 +4272,11 @@ public:
         TimeLimit = R.number();
         const uint64_t CollectionLimit = R.number();
         const uint64_t FunctionLimit = R.number();
+        const uint64_t RecordedWorkers = R.number();
         if (!R.Ok || !within(Opts.SolverTimeoutMs, TimeLimit) ||
             !within(Opts.CollectionTimeoutMs, CollectionLimit) ||
-            !within(Opts.FunctionTimeoutMs, FunctionLimit))
+            !within(Opts.FunctionTimeoutMs, FunctionLimit) ||
+            Workers > RecordedWorkers)
           return std::nullopt;
       }
       Run.AllOk = R.flag();
@@ -4353,8 +4364,8 @@ public:
               "this verdict is the proof cache's record of a run with "
               "--timeout=" +
               std::to_string(TimeLimit) +
-              "; a larger limit, or a change to the function, verifies it "
-              "again");
+              "; a larger limit, more --jobs, a change to the function, or "
+              "--proof-cache-check verifies it again");
         Run.Diags.push_back(std::move(D));
       }
       Run.FailedCallers = R.set();
@@ -6169,9 +6180,6 @@ public:
           Runs[I] = std::move(Recorded);
         }
     Verified = std::chrono::steady_clock::now();
-    if (Opts.Summary)
-      for (const FunctionRun &Run : Runs)
-        Opts.Summary->Reused += Run.Reused && !Run.Diags.empty();
     // The report lists the functions reported, as a run of the whole file
     // would, with the time of the confirmations below.
     llvm::scope_exit ReportTimes([&] {
@@ -6229,6 +6237,8 @@ public:
         D.FunctionLoc = Functions[I]->DeclLoc;
         Diags.push_back(std::move(D));
       }
+      if (Run.Reused)
+        ReusedRuns.emplace_back(Base, Diags.size());
       AllOk &= Run.AllOk;
       AnyFailed |= Run.AnyFailed;
       FailedCallers.insert(Run.FailedCallers.begin(), Run.FailedCallers.end());
@@ -7497,6 +7507,16 @@ public:
                                       D.K == VerifyDiagnostic::Exported));
   }
 
+  /// Counts the functions read from the proof cache that the run reports:
+  /// like every count of a summary, not the generated proofs that hold nor
+  /// what --function leaves out.
+  void countReused(VerifySummary &Summary) const {
+    for (const auto &[Begin, End] : ReusedRuns)
+      Summary.Reused += std::any_of(
+          Diags.begin() + Begin, Diags.begin() + End,
+          [](const VerifyDiagnostic &D) { return reported(D); });
+  }
+
   /// A contract declared without a definition waits for the files verified
   /// with this one, in one run or by checkContracts.
   bool deferredContracts() const {
@@ -7592,6 +7612,7 @@ public:
       count(D, Summary);
       printJSONDiagnostic(D, Report);
     }
+    countReused(Summary);
     Report << llvm::json::Value(summaryRecord(Summary)) << "\n";
     return true;
   }
@@ -7605,6 +7626,8 @@ public:
            << PLoc.getColumn() << ": ";
       OS << Line << "\n";
     }
+    if (Opts.Summary)
+      countReused(*Opts.Summary);
     for (const auto &D : Diags) {
       if (!reported(D))
         continue;
