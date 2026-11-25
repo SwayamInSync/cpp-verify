@@ -1134,7 +1134,8 @@ nesting take many times the stack: the checker now continues on a fresh
 stack once half of its own is used, so its nesting limit holds in every
 build. It found no other memory error or undefined behavior in the verifier.
 A program the verifier dies on without a sanitizer's report, such as a
-failed assertion, fails the job too (:doc:`language/tooling`).
+failed assertion, fails the job too, and a program that gives no result in
+time is reported with the stack of every thread (:doc:`language/tooling`).
 
 **The exhaustive ULEB128 decoder runs.** The suite skipped
 ``llvm_uleb128_decoder_exhaustive.cpp``, which classifies every input of
