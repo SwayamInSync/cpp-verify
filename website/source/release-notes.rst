@@ -13,12 +13,14 @@ next release with ``-dev``.
 
 The data formats keep versions of their own, listed with each release.
 
-0.2.0 (in development)
-----------------------
+0.2.0
+-----
 
-The changes on ``main`` since 0.1.1, which 0.2.0 will ship. Each entry says
-what 0.1.1 did and what happens now; the page it links shows an example with
-the verifier's output.
+Released on 2026-11-26. Each entry says what 0.1.1 did and what happens now;
+the page it links shows an example with the verifier's output, and
+:doc:`migrating-to-0.2` lists what a user of 0.1.1 has to change. Archives for
+Linux x86_64 and macOS arm64 are attached to the release on GitHub, as for
+0.1.0; on other systems, including Windows, build from source.
 
 **Built on** LLVM 23.1.6 (0.1.1: 23.1.3), a point release of the same LLVM
 major, so the C++ the compiler accepts is unchanged. Z3 4.13.4 is built in,
