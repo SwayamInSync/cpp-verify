@@ -10,7 +10,7 @@
 | CBMC | Bounded model checking | Partial | Custom (goto-cc) | User assertions only | Active |
 | Kani | Bounded model checking | No (Rust only) | Rust MIR | Rust macros | Active |
 | Verus | Deductive (SMT) | No (Rust only) | Rust compiler | First-class syntax | Active |
-| **CppVerify** | **Deductive (wp + Z3, cvc5, Lean), plus BMC** | **A documented subset, natively** | **Clang (modified)** | **First-class syntax** | **0.1.1** |
+| **CppVerify** | **Deductive (wp + Z3, cvc5, Lean), plus BMC** | **A documented subset, natively** | **Clang (modified)** | **First-class syntax** | **0.2.0** |
 
 ## Current Differentiators and Research Hypotheses
 
@@ -56,7 +56,7 @@ the other.
 | Integer modeling | Explicit mathematical and machine-oriented types | Mathematical explicit specs; machine executable/proof and lifted `constexpr` |
 | Recursive specifications | Checked termination measures | Explicit spec recursion requires `cppverify::decreases`, except an inductive predicate (`cppverify::inductive`), the least fixpoint of its body; automatic `constexpr` lifting accepts only non-recursive, loop-free helpers |
 | Executable helper reuse | Uses Verus's mode and specification mechanisms | Experiments with selected `constexpr` helpers and Clang constant evaluation |
-| Current maturity | Evaluated research verifier with substantial examples and formal core | Research prototype (0.1.1) with three case studies (an extraction of LLVM's ULEB128 codec, UTF-8 validation, binary search); broader evaluation and formalization remain open |
+| Current maturity | Evaluated research verifier with substantial examples and formal core | Research prototype (0.2.0) with four case studies (an extraction of LLVM's ULEB128 codec, UTF-8 validation, binary search, a ring buffer); broader evaluation and formalization remain open |
 
 ## Honest Assessment
 
