@@ -54,6 +54,8 @@ public:
   /// A record with its payload, which its checksum guards.
   ProofCacheRecord lookupRecord(llvm::StringRef Key) const;
   llvm::Error storeRecord(llvm::StringRef Key, llvm::StringRef Payload) const;
+  /// Removes the record under a key, if there is one.
+  llvm::Error removeRecord(llvm::StringRef Key) const;
   llvm::Error prune() const;
 };
 
