@@ -1,12 +1,12 @@
 # Roadmap
 
-## Release 0.2.0 (in development, based on LLVM 23.1.6)
+## Release 0.2.0 (based on LLVM 23.1.6)
 
 0.2.0 keeps 0.1's contract language and widens what it can be written
 about. The [release notes](https://swayaminsync.github.io/cpp-verify/release-notes.html)
 describe every change with an example, and the
 [migration page](https://swayaminsync.github.io/cpp-verify/migrating-to-0.2.html)
-what a user of 0.1.1 has to change. On `main` today:
+what a user of 0.1.1 has to change. It adds:
 
 - **Classes and templates.** Member functions, constructors, member
   operators, and class invariants at public boundaries; function and class
@@ -36,9 +36,6 @@ what a user of 0.1.1 has to change. On `main` today:
   UndefinedBehaviorSanitizer, ThreadSanitizer, and a fuzzer of the archive
   reader run every night; a release is built by the Clang it ships; a new
   Z3 release is adopted only through a verdict-and-time gate.
-
-Before the release: the last LLVM 23.1.x point release, a release candidate,
-and the verdict-and-time differential against 0.1.1.
 
 After 0.2.0 the next frontiers are floating-point semantics, inheritance and
 virtual dispatch, library types (`std::vector`, `std::array`, smart
