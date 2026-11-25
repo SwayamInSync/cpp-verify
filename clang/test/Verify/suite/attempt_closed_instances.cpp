@@ -1,8 +1,6 @@
 // RUN: rm -rf %t && mkdir %t
 // RUN: not cpp-verify --dump-smt2=%t %s -- -std=c++17 2>&1 | FileCheck %s
-// RUN: grep -l "to confirm a counterexample by proof" %t/small_power-*/*.smt2 > %t/confirmations
-// RUN: test -s %t/confirmations
-// RUN: xargs grep -c "^(assert" < %t/confirmations | FileCheck %s --check-prefix=SIZE
+// RUN: %python -c "import glob, sys; [print(sum(l.startswith('(assert') for l in open(f))) for f in glob.glob(sys.argv[1] + '/small_power-*/*.smt2') if 'to confirm a counterexample by proof' in open(f).read()]" %t | FileCheck %s --check-prefix=SIZE
 //
 // A query that confirms a counterexample is an attempt with a slice of the
 // time, and Z3 cannot be stopped while it takes in ground facts. So the
@@ -29,5 +27,5 @@ cppverify::proof void small_power(int n)
 }
 
 // CHECK: verification failed: small_power [postcondition] (confirmed by a proof at this input
-// SIZE: .smt2:
-// SIZE-NOT: {{:[0-9][0-9][0-9]+$}}
+// SIZE: {{^[0-9]+$}}
+// SIZE-NOT: {{^[0-9][0-9][0-9]}}
