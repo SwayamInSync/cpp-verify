@@ -28,10 +28,10 @@ the compiler delays parsing the body of a template, and the parser returned
 before it attached the contract: a function template lost its clauses, so it
 was not verified and its callers inlined it or were unresolved, and a spec
 template was taken for executable code (``executable call is unsupported in
-this expression context: scaled<3>``). A template with clauses, and a spec
-or proof template, is now parsed where it is defined on every target; other
-templates are delayed as before, so code that needs the delay still
-compiles with contracts enabled. Found by the first run of the Verify tests
+this expression context: scaled<3>``). A template with clauses, a spec or
+proof template, and one whose body names ``cppverify`` is now parsed where
+it is defined on every target; other templates are delayed as before, so
+code that needs the delay still compiles with contracts enabled. Found by the first run of the Verify tests
 on Windows.
 
 These made 0.1.1 report ``Verified`` for a claim that is false, or compile a
