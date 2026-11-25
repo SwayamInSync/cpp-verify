@@ -110,8 +110,8 @@ query of ``decode_uleb128_canonical``, the function's complete query, which
 takes 57 s. At the default limit that function is ``Unresolved`` with
 ``solver.timeout`` after 34 s, and ``roundtrip_uleb128``, which calls it,
 with ``callee.contract``; ``--timeout=60000`` is enough. The time is the
-solver's search: the same query replayed alone in Z3 takes 31 s, and a
-renamed local can move it either way.
+solver's search: the same query replayed alone in Z3 takes 31 s, and
+renaming one local of the function changes its proof from 60 s to 51 s.
 
 Known LLVM shift defect
 -----------------------
