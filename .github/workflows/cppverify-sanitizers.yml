@@ -47,7 +47,7 @@ jobs:
       - name: Install build tools and cvc5
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build ccache clang-18 libclang-rt-18-dev
+          sudo apt-get install -y ninja-build ccache clang-18 libclang-rt-18-dev gdb
           curl -sSfL -o "$RUNNER_TEMP/cvc5.zip" \
             "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/cvc5-Linux-x86_64-static.zip"
           unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
@@ -112,7 +112,7 @@ jobs:
       - name: Install build tools and cvc5
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build ccache clang-18 llvm-18 libclang-rt-18-dev
+          sudo apt-get install -y ninja-build ccache clang-18 llvm-18 libclang-rt-18-dev gdb
           curl -sSfL -o "$RUNNER_TEMP/cvc5.zip" \
             "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/cvc5-Linux-x86_64-static.zip"
           unzip -q "$RUNNER_TEMP/cvc5.zip" -d "$RUNNER_TEMP/cvc5"
