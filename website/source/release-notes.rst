@@ -1056,9 +1056,15 @@ refuses a ``lake`` outside elan that reports another Lean
 report as ``spec.fuel``, in 0.1.1 too: each check of a counterexample that
 needed ``even(-1)`` searched derivation heights until the whole check ran out
 of steps, and a check that ends that way keeps nothing for the next. The
-height search now has a slice of its own, so the answer is the same for
-every counterexample and is kept: the claim reports in about a second, with
-the same message (:doc:`language/ghost-proofs`).
+search tried every height up to 1023 in turn, though a derivation of one
+height is one of every greater height. It now tries doubling heights, under
+a limit of work of its own, so the answer is the same for every
+counterexample and is kept: the claim reports in 0.2 s with the same
+message. Claims the old search decided slowly are faster too
+(``reach(1, 100)`` over a graph of infinitely many nodes: 9 s, now 3 to
+6 s), and
+some it could not decide are decided (``reach(1, 200)``)
+(:doc:`language/ghost-proofs`).
 
 Testing
 ~~~~~~~

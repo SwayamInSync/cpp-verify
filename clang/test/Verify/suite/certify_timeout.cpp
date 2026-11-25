@@ -21,7 +21,7 @@ cppverify::proof void no_odd_leaf() cppverify::post(leaves(17, 1) == 0) {}
 // DEFAULT: error: verification failed: no_odd_leaf [postcondition] [backend=z3] [reason=counterexample]
 
 // odd(4) is false, and its derivations never end: the search of derivation
-// heights has a slice of its own, which no time limit shortens.
+// heights tries doubling heights, which takes far less than this time limit.
 cppverify::spec bool odd(int n) cppverify::inductive { return n == 1 || odd(n - 2); }
 
 cppverify::proof void four_is_odd() cppverify::post(odd(4)) {}

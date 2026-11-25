@@ -1,11 +1,11 @@
 // RUN: not %python %S/Inputs/within_seconds.py 20 %cpp-verify --jobs=1 %s -- 2>&1 | FileCheck %s
 //
 // Whether an inductive predicate holds where its derivations never end is
-// not decidable by search. The check of a counterexample that needs it gives
-// the search of derivation heights a slice of its own, so that the answer
-// "undecided" comes quickly and the same for every model, and is remembered:
-// this claim took 42 s, most of it in checks that ran out of steps on the
-// same application.
+// not decidable by search. The check of a counterexample that needs it
+// tries doubling derivation heights under a limit of work of its own, so the
+// answer "undecided" comes quickly and the same for every model, and is
+// remembered: this claim took 42 s, most of it in checks that tried every
+// height in turn until they ran out of steps on the same application.
 
 namespace cv = cppverify;
 
