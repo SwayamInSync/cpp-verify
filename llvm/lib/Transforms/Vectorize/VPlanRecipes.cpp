@@ -576,8 +576,7 @@ Type *llvm::computeScalarTypeForInstruction(unsigned Opcode,
   bool AllOperandsSameType =
       Instruction::isBinaryOp(Opcode) ||
       is_contained({VPInstruction::FirstOrderRecurrenceSplice,
-                    VPInstruction::BuildVector,
-                    VPInstruction::BuildStructVector},
+                    VPInstruction::BuildVector},
                    Opcode);
   if (AllOperandsSameType)
     for (unsigned Idx = 1; Idx != Operands.size(); ++Idx)
@@ -674,7 +673,6 @@ unsigned VPInstruction::getNumOperandsForOpcode() const {
   case Instruction::AtomicCmpXchg:
   case Instruction::Fence:
   case VPInstruction::AnyOf:
-  case VPInstruction::BuildStructVector:
   case VPInstruction::BuildVector:
   case VPInstruction::Intrinsic:
   case VPInstruction::CanonicalIVIncrementForPart:
@@ -882,28 +880,9 @@ Value *VPInstruction::generate(VPTransformState &State) {
     return Builder.CreateVectorSplat(
         State.VF, State.get(getOperand(0), /*IsScalar*/ true), "broadcast");
   }
-  case VPInstruction::BuildStructVector: {
-    // For struct types, we need to build a new 'wide' struct type, where each
-    // element is widened, i.e., we create a struct of vectors.
-    auto *StructTy = cast<StructType>(getOperand(0)->getScalarType());
-    Value *Res = PoisonValue::get(toVectorizedTy(StructTy, State.VF));
-    for (const auto &[LaneIndex, Op] : enumerate(operands())) {
-      for (unsigned FieldIndex = 0; FieldIndex != StructTy->getNumElements();
-           FieldIndex++) {
-        Value *ScalarValue =
-            Builder.CreateExtractValue(State.get(Op, true), FieldIndex);
-        Value *VectorValue = Builder.CreateExtractValue(Res, FieldIndex);
-        VectorValue =
-            Builder.CreateInsertElement(VectorValue, ScalarValue, LaneIndex);
-        Res = Builder.CreateInsertValue(Res, VectorValue, FieldIndex);
-      }
-    }
-    return Res;
-  }
   case VPInstruction::BuildVector: {
-    auto *ScalarTy = getOperand(0)->getScalarType();
-    auto NumOfElements = ElementCount::getFixed(getNumOperands());
-    Value *Res = PoisonValue::get(toVectorizedTy(ScalarTy, NumOfElements));
+    Value *Res = PoisonValue::get(
+        FixedVectorType::get(getScalarType(), getNumOperands()));
     for (const auto &[Idx, Op] : enumerate(operands()))
       Res = Builder.CreateInsertElement(Res, State.get(Op, true),
                                         Builder.getInt32(Idx));
@@ -1532,7 +1511,6 @@ void VPInstruction::addOperand(VPValue *Op) {
     break;
   case VPInstruction::ComputeReductionResult:
   case VPInstruction::BuildVector:
-  case VPInstruction::BuildStructVector:
     assert(Ty == getOperand(0)->getScalarType() &&
            "appended operand must match operand 0's scalar type");
     break;
@@ -1576,8 +1554,7 @@ void VPInstruction::execute(VPTransformState &State) {
   bool GeneratesPerFirstLaneOnly = canGenerateScalarForFirstLane() &&
                                    (vputils::onlyFirstLaneUsed(this) ||
                                     isVectorToScalar() || isSingleScalar());
-  assert((((GeneratedValue->getType()->isVectorTy() ||
-            GeneratedValue->getType()->isStructTy()) ==
+  assert(((GeneratedValue->getType()->isVectorTy() ==
            !GeneratesPerFirstLaneOnly) ||
           State.VF.isScalar()) &&
          "scalar value but not only first lane defined");
@@ -1613,7 +1590,6 @@ bool VPInstruction::opcodeMayReadOrWriteFromMemory() const {
   case VPInstruction::BranchOnTwoConds:
   case VPInstruction::BranchOnCount:
   case VPInstruction::Broadcast:
-  case VPInstruction::BuildStructVector:
   case VPInstruction::BuildVector:
   case VPInstruction::CalculateTripCountMinusVF:
   case VPInstruction::CanonicalIVIncrementForPart:
@@ -1657,7 +1633,7 @@ bool VPInstruction::opcodeMayReadOrWriteFromMemory() const {
 
 bool VPInstruction::usesFirstLaneOnly(const VPValue *Op) const {
   assert(is_contained(operands(), Op) && "Op must be an operand of the recipe");
-  if (Instruction::isBinaryOp(getOpcode()) || Instruction::isCast(getOpcode()))
+  if (vputils::propagatesFirstLaneUse(this, Op))
     return vputils::onlyFirstLaneUsed(this);
 
   switch (getOpcode()) {
@@ -1668,15 +1644,6 @@ bool VPInstruction::usesFirstLaneOnly(const VPValue *Op) const {
   case Instruction::InsertElement:
     return Op == getOperand(1) || Op == getOperand(2);
   case Instruction::PHI:
-    return true;
-  case Instruction::FCmp:
-  case Instruction::ICmp:
-  case Instruction::Select:
-  case Instruction::Or:
-  case Instruction::Freeze:
-  case VPInstruction::Not:
-    // TODO: Cover additional opcodes.
-    return vputils::onlyFirstLaneUsed(this);
   case Instruction::Load:
   case VPInstruction::ActiveLaneMask:
   case VPInstruction::ExplicitVectorLength:
@@ -1690,22 +1657,16 @@ bool VPInstruction::usesFirstLaneOnly(const VPValue *Op) const {
   case VPInstruction::ReductionStartVector:
   case VPInstruction::ResumeForEpilogue:
     return true;
-  case VPInstruction::BuildStructVector:
   case VPInstruction::BuildVector:
-    // Before replicating by VF, Build(Struct)Vector uses all lanes of the
-    // operand, after replicating its operands only the first lane is used.
+    // Before replicating by VF, BuildVector uses all lanes of the operand,
+    // after replicating its operands only the first lane is used.
     // Before replicating, it will have only a single operand.
     return getNumOperands() > 1;
   case VPInstruction::PtrAdd:
-    return Op == getOperand(0) || vputils::onlyFirstLaneUsed(this);
-  case VPInstruction::WidePtrAdd:
-    // WidePtrAdd supports scalar and vector base addresses.
-    return false;
   case VPInstruction::ExitingIVValue:
   case VPInstruction::ExtractLane:
     return Op == getOperand(0);
-  };
-  llvm_unreachable("switch should return");
+  }
 }
 
 bool VPInstruction::usesFirstPartOnly(const VPValue *Op) const {
@@ -1777,9 +1738,6 @@ void VPInstruction::printRecipe(raw_ostream &O, const Twine &Indent,
     break;
   case VPInstruction::Broadcast:
     O << "broadcast";
-    break;
-  case VPInstruction::BuildStructVector:
-    O << "buildstructvector";
     break;
   case VPInstruction::BuildVector:
     O << "buildvector";
@@ -4925,6 +4883,8 @@ void VPReductionPHIRecipe::printRecipe(raw_ostream &O, const Twine &Indent,
 
 bool VPBlendRecipe::usesFirstLaneOnly(const VPValue *Op) const {
   assert(is_contained(operands(), Op) && "Op must be an operand of the recipe");
+  assert(vputils::propagatesFirstLaneUse(this, Op) &&
+         "Blend should propagate first lane use");
   return vputils::onlyFirstLaneUsed(this);
 }
 
