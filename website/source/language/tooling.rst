@@ -1287,8 +1287,9 @@ under any.
    ...
    Summary: 7 verified, 1 failed, 3 reused from the proof cache in 0.0 s
 
-The summary counts the functions replayed, ``--time-report`` marks each of
-them ``(proof cache)`` (``"proof_cache": true`` in its JSON records), and a
+The summary counts the replayed functions the run reports, as its other
+counts do (not the generated proofs that hold, nor what ``--function``
+leaves out), ``--time-report`` marks each of them ``(proof cache)`` (``"proof_cache": true`` in its JSON records), and a
 replayed verdict shows every query as answered, ``[cache=27/27]``.
 
 What an edit verifies again follows from the key:
@@ -1329,10 +1330,11 @@ proved.
 
 A verdict ``Unresolved`` with ``solver.timeout`` costs every run its whole
 limit, so it is recorded too, with the limits it was reached under
-(``--timeout``, the limit for collections, ``--function-timeout``) and with
-where the function and everything it names is in the source, since the
-verdict names those places. A run reads it when none of its limits is
-larger and nothing has moved, and says so:
+(``--timeout``, the limit for collections, ``--function-timeout``), the
+number of workers (``--jobs``), and where the function and everything it
+names is in the source, since the verdict names those places. A run reads
+it when none of its limits is larger, it has no more workers, and nothing
+has moved, and says so:
 
 .. code-block:: console
 
@@ -1341,13 +1343,16 @@ larger and nothing has moved, and says so:
    Summary: 2 verified, 1 unresolved (solver.timeout 1) in 3.1 s
    $ cpp-verify --timeout=1500 --proof-cache=.cppverify-cache loop.cpp
    loop.cpp:8:3: Unresolved: matching_loop [backend=z3] [cache=2/2] [reason=solver.timeout] (proof obligation ...::assertion@8:3: timeout)
-   note: this verdict is the proof cache's record of a run with --timeout=1500; a larger limit, or a change to the function, verifies it again
+   note: this verdict is the proof cache's record of a run with --timeout=1500; a larger limit, more --jobs, a change to the function, or --proof-cache-check verifies it again
    Summary: 2 verified, 1 unresolved (solver.timeout 1), 2 reused from the proof cache in 0.0 s
 
-A larger limit (or none) verifies again and replaces the record, and so
-does any edit that moves the function or what it names. A timeout depends
-on the machine and its load, so a recorded one may be a proof on a quieter
-day: raise the limit, or remove the cache directory, to try again.
+A larger limit (or none) verifies again and replaces the record, and so do
+more workers, with which a function's whole query and its obligations are
+solved side by side, and any edit that moves the function or what it names.
+A timeout also depends on the machine's load, which no record holds, so a
+recorded one may be a proof on a quieter day: a run with
+``--proof-cache-check`` verifies every recorded function again and replaces
+the record of a timeout with what it finds.
 
 Runs that write something of each function do not use records: the dumps
 (``--dump-ir``, ``--dump-smt2`` is unaffected since nothing is solved),
