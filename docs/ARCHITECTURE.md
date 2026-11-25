@@ -2079,7 +2079,13 @@ took 30 s. An attempt also gets the integer encoding, no domain probing,
 and refinement rounds of at most `MaxProofRoundInstances` (200) instances:
 thousands of ground instances can keep Z3 from noticing a timeout (a round
 of 1799 instances of `triangle` ran 6 s past a deadline of 5 s), while the
-instances a proof by induction needs are few (at most 7 in the tests). At
+instances a proof by induction needs are few (at most 7 in the tests). The
+same limit holds for the equations computed before an attempt's first check
+(`closedApplicationInstances`): Z3 suspends cancellation while it propagates
+at the base level (`smt::context::propagate`), where every ground equation
+is asserted, so neither its timeout nor an interrupt stops the arithmetic
+solver there. A confirmation given the 2,449 equations of `sum(2438)` ran
+125 s past a slice of 5 s. At
 most three schemes by a spec and two by a variable are tried. The result names the induction that
 settled it (`InductionUsed`) or those tried (`InductionTried`). In cvc5's
 integer encoding a binder whose range fits a machine sort converts to that
