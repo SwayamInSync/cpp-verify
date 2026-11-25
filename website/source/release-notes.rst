@@ -555,6 +555,21 @@ statement (:doc:`language/functions-loops`).
 Running cpp-verify
 ~~~~~~~~~~~~~~~~~~
 
+**A confirmation by proof keeps to its time.** When a counterexample's
+check runs out of time, the verifier tries to confirm the counterexample by
+a proof at that input, within five seconds by default. Before the proof it
+computed every spec application with constant arguments and gave the solver
+one equation per step, up to 20,000. Z3 cannot be stopped while it takes in
+such facts, so the five seconds could become minutes: with
+``--certify-timeout=50``, 19 of 59 runs of the suite's
+``spec_automation.cpp`` took 135 to 180 s, and a slow build of the verifier
+did not finish in 900 s. A confirmation and an automatic induction now get
+at most 200 such equations, the limit their later rounds already had; the
+same runs take 6 to 16 s with the same verdicts. A confirmation that needed
+more computed steps than that now leaves its verdict unresolved; a lemma
+about the spec settles it. ``--dump-smt2`` scripts say which queries these
+are (:doc:`language/tooling`).
+
 **Proved functions are not verified again.** The proof cache kept proofs of
 single obligations, and looked them up after lowering a function, which for
 many functions is most of the time: a second run of the suite's
