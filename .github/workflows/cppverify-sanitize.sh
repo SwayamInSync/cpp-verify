@@ -89,16 +89,21 @@ run() {
   local pid=$! watchdog status
   # After the limit: where every thread is, before the program is stopped.
   # A hang that happens one night in ten cannot be found any other way.
+  # The watchdog ends at once when the program does: stopped while it
+  # waits, it stops its timer and goes no further, so it never reports a
+  # program that gave its result.
   (
-    sleep "$LIMIT"
+    trap 'kill $timer 2> /dev/null; exit 0' TERM
+    sleep "$LIMIT" &
+    timer=$!
+    wait $timer
     stacks $pid >> "$OUT/$name.txt" 2>&1
     echo "cppverify-sanitize: no result within $LIMIT s" >> "$OUT/$name.txt"
     kill -KILL $pid 2> /dev/null
-  ) &
+  ) > /dev/null 2>&1 &
   watchdog=$!
   wait $pid 2> /dev/null
   status=$?
-  pkill -P $watchdog 2> /dev/null
   kill $watchdog 2> /dev/null
   wait $watchdog 2> /dev/null
   grep -q '^cppverify-sanitize: no result' "$OUT/$name.txt" && return 0
