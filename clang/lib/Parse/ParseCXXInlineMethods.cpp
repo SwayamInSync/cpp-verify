@@ -153,8 +153,9 @@ NamedDecl *Parser::ParseCXXInlineMethodDef(
   // In delayed template parsing mode, if we are within a class template
   // or if we are about to parse function member template then consume
   // the tokens and store them for parsing at the end of the translation unit.
-  // CppVerify: a member with clauses, or a spec or proof member, is parsed
-  // where it is defined, as a function template is (ParseFunctionDefinition).
+  // CppVerify: a member with clauses, a spec or proof member, and one whose
+  // body names cppverify is parsed where it is defined, as a function
+  // template is (ParseFunctionDefinition).
   if (getLangOpts().DelayedTemplateParsing && !HasCppVerifyContract &&
       D.getFunctionDefinitionKind() == FunctionDefinitionKind::Definition &&
       !D.getDeclSpec().hasConstexprSpecifier() &&
@@ -163,7 +164,8 @@ NamedDecl *Parser::ParseCXXInlineMethodDef(
       ((Actions.CurContext->isDependentContext() ||
         (TemplateInfo.Kind != ParsedTemplateKind::NonTemplate &&
          TemplateInfo.Kind != ParsedTemplateKind::ExplicitSpecialization)) &&
-       !Actions.IsInsideALocalClassWithinATemplateFunction())) {
+       !Actions.IsInsideALocalClassWithinATemplateFunction()) &&
+      !(getLangOpts().VerifyContracts && functionBodyNamesCppVerify())) {
 
     CachedTokens Toks;
     LexTemplateFunctionForLateParsing(Toks);
